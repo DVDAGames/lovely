@@ -42,6 +42,13 @@ the runtime patch checklist Lovely is tracking.
 
 ## Commands
 
+Install the CLI from crates.io with the `lovely-packager` package. The installed
+binary is still named `lovely`:
+
+```sh
+cargo install lovely-packager --locked
+```
+
 ```sh
 lovely init
 lovely lock

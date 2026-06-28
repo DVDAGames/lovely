@@ -1,5 +1,5 @@
 [package]
-name = "lovely"
+name = "lovely-packager"
 version = "0.1.0"
 edition = "2024"
 license = "GPL-3.0-only"
@@ -7,3 +7,11 @@ description = "A LÖVE >= 11 distribution toolchain for web, desktop, and Steam 
 repository = "https://github.com/DVDAGames/lovely"
 
 [dependencies]
+
+[lib]
+name = "lovely"
+path = "src/lib.rs"
+
+[[bin]]
+name = "lovely"
+path = "src/main.rs"
