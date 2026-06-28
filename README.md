@@ -69,11 +69,14 @@ Web builds prepend `./game.love` for love.js and append any configured
 `targets.web.arguments`. When no project template is configured, Lovely uses
 the `html` template declared by the selected Lovely.js `lovely-runtime.json`.
 Templates can use `__GAME_TITLE__`, `__WEB_ARGUMENTS__`, and `__WEB_MEMORY__`
-placeholders:
+placeholders. Use `html_assets` for files referenced by a custom template, such
+as logos or fonts; files are copied beside `index.html`, and directories are
+copied under their directory name:
 
 ```toml
 [targets.web]
 html_template = "src/templates/index.html"
+html_assets = ["src/templates/logo.png", "src/templates/fonts"]
 runtime_path = "runtimes/web"
 arguments = ["--demo-capture"]
 ```

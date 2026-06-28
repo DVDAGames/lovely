@@ -131,6 +131,74 @@ var Module = {
 }
 
 #[test]
+fn web_build_copies_configured_html_assets() {
+    let root = tempfile_dir("web-html-assets");
+    copy_fixture(&root);
+    fs::create_dir_all(root.join("templates")).unwrap();
+    fs::write(
+        root.join("templates/index.html"),
+        r#"<!doctype html>
+<img src="logo.png" alt="Game logo">
+<script>var Module = { arguments: __WEB_ARGUMENTS__ };</script>
+"#,
+    )
+    .unwrap();
+    fs::write(root.join("templates/logo.png"), b"logo-bytes").unwrap();
+
+    assert!(
+        Command::new(binary())
+            .arg("init")
+            .current_dir(&root)
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    let config = fs::read_to_string(root.join("lovely.toml")).unwrap();
+    fs::write(
+        root.join("lovely.toml"),
+        config
+            .replace(
+                "html_template = \"\"",
+                "html_template = \"templates/index.html\"",
+            )
+            .replace("html_assets = []", "html_assets = [\"templates/logo.png\"]"),
+    )
+    .unwrap();
+
+    let output = Command::new(binary())
+        .args(["doctor", "web"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let output = Command::new(binary())
+        .args(["build", "web"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read(root.join("dist/web/logo.png")).unwrap(),
+        b"logo-bytes"
+    );
+    let zip = fs::read(find_web_zip(&root)).unwrap();
+    assert!(contains_bytes(&zip, b"logo.png"));
+    assert!(contains_bytes(&zip, b"logo-bytes"));
+}
+
+#[test]
 fn web_build_uses_configured_runtime_path_without_cache_setup() {
     let root = tempfile_dir("web-runtime-path");
     copy_fixture(&root);

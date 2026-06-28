@@ -72,6 +72,20 @@ impl TargetAdapter for WebAdapter {
                 path: None,
             });
         }
+        for asset in &config.targets.web.html_assets {
+            let asset_path = root.join(asset);
+            if !asset_path.exists() {
+                report.push(Diagnostic {
+                    id: "web.html_asset_missing",
+                    severity: Severity::Error,
+                    message: format!(
+                        "configured web html_asset does not exist: {}",
+                        asset_path.display()
+                    ),
+                    path: Some(asset_path),
+                });
+            }
+        }
         if config.targets.web.variant == "web-threaded" {
             report.push(Diagnostic {
                 id: "web.cross_origin_isolation",
@@ -120,6 +134,7 @@ impl TargetAdapter for WebAdapter {
         if let Some(runtime) = &runtime {
             copy_runtime_into_output(runtime.kind, &runtime.path, &output)?;
         }
+        let html_assets = html_asset_entries(root, config)?;
 
         let mut zip_entries = vec![
             ArchiveEntry::file("index.html", index.into_bytes())?,
@@ -135,6 +150,8 @@ impl TargetAdapter for WebAdapter {
         if let Some(runtime) = &runtime {
             append_runtime_zip_entries(runtime.kind, &runtime.path, &mut zip_entries)?;
         }
+        append_html_asset_zip_entries(&mut zip_entries, &html_assets)?;
+        write_html_asset_entries(&output, &html_assets)?;
         let upload_zip = root
             .join(&config.paths.output)
             .join(format!("{}-web.zip", config.game.id));
@@ -249,6 +266,85 @@ fn append_runtime_zip_entries(
         }
     }
     entries.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(())
+}
+
+fn html_asset_entries(root: &Path, config: &Config) -> Result<Vec<ArchiveEntry>> {
+    let mut entries = Vec::new();
+    for asset in &config.targets.web.html_assets {
+        let source = root.join(asset);
+        if !source.exists() {
+            return Err(crate::LovelyError::Command(format!(
+                "configured web html_asset does not exist: {}",
+                source.display()
+            )));
+        }
+
+        if source.is_dir() {
+            let prefix = source
+                .file_name()
+                .ok_or_else(|| {
+                    crate::LovelyError::Command(format!(
+                        "configured web html_asset has no directory name: {}",
+                        source.display()
+                    ))
+                })?
+                .to_string_lossy();
+            for file in fsutil::collect_files(&source)? {
+                let rel = fsutil::relative_path(&source, &file)?;
+                let name = format!("{}/{}", prefix, fsutil::normalize_slashes(&rel));
+                entries.push(ArchiveEntry::file(
+                    name,
+                    std::fs::read(&file).map_err(|err| crate::LovelyError::io(&file, err))?,
+                )?);
+            }
+        } else {
+            let name = source
+                .file_name()
+                .ok_or_else(|| {
+                    crate::LovelyError::Command(format!(
+                        "configured web html_asset has no file name: {}",
+                        source.display()
+                    ))
+                })?
+                .to_string_lossy()
+                .to_string();
+            entries.push(ArchiveEntry::file(
+                name,
+                std::fs::read(&source).map_err(|err| crate::LovelyError::io(&source, err))?,
+            )?);
+        }
+    }
+    entries.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(entries)
+}
+
+fn append_html_asset_zip_entries(
+    entries: &mut Vec<ArchiveEntry>,
+    assets: &[ArchiveEntry],
+) -> Result<()> {
+    for asset in assets {
+        if entries.iter().any(|entry| entry.name == asset.name) {
+            return Err(crate::LovelyError::Command(format!(
+                "configured web html_asset conflicts with existing web output: {}",
+                asset.name
+            )));
+        }
+        entries.push(asset.clone());
+    }
+    entries.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(())
+}
+
+fn write_html_asset_entries(output: &Path, assets: &[ArchiveEntry]) -> Result<()> {
+    for asset in assets {
+        let destination = output.join(&asset.name);
+        if let Some(parent) = destination.parent() {
+            fsutil::ensure_dir(parent)?;
+        }
+        std::fs::write(&destination, &asset.bytes)
+            .map_err(|err| crate::LovelyError::io(&destination, err))?;
+    }
     Ok(())
 }
 

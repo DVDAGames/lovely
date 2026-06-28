@@ -45,6 +45,7 @@ pub struct WebTargetConfig {
     pub enabled: bool,
     pub variant: String,
     pub html_template: Option<PathBuf>,
+    pub html_assets: Vec<PathBuf>,
     pub runtime_path: Option<PathBuf>,
     pub memory_bytes: u64,
     pub arguments: Vec<String>,
@@ -253,6 +254,7 @@ enabled = true
 variant = "web-compat"
 memory_bytes = 67108864
 html_template = ""
+html_assets = {html_assets}
 runtime_path = {runtime_path}
 arguments = {arguments}
 
@@ -301,6 +303,7 @@ allow_warnings = []
                 .as_ref()
                 .map(|path| format!("\"{}\"", escape(&fsutil::normalize_slashes(path))))
                 .unwrap_or_else(|| "\"\"".to_string()),
+            html_assets = format_path_array(&self.targets.web.html_assets),
             includes = format_string_array(&self.paths.includes),
             excludes = format_string_array(&self.paths.excludes),
             arguments = format_string_array(&self.targets.web.arguments)
@@ -315,6 +318,7 @@ impl Default for TargetsConfig {
                 enabled: true,
                 variant: "web-compat".to_string(),
                 html_template: None,
+                html_assets: Vec::new(),
                 runtime_path: None,
                 memory_bytes: 67_108_864,
                 arguments: Vec::new(),
@@ -347,6 +351,9 @@ fn apply_web(config: &mut Config, values: Option<&BTreeMap<String, String>>) -> 
         "html_template",
         config.targets.web.html_template.clone(),
     );
+    if let Some(assets) = get_string_array(values, "html_assets")? {
+        config.targets.web.html_assets = assets.into_iter().map(PathBuf::from).collect();
+    }
     config.targets.web.runtime_path = get_optional_path(
         values,
         "runtime_path",
@@ -492,6 +499,15 @@ fn format_string_array(values: &[String]) -> String {
     format!("[{values}]")
 }
 
+fn format_path_array(values: &[PathBuf]) -> String {
+    let values = values
+        .iter()
+        .map(|value| format!("\"{}\"", escape(&fsutil::normalize_slashes(value))))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("[{values}]")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -508,6 +524,7 @@ author = "Team"
 [targets.web]
 variant = "web-threaded"
 runtime_path = "runtimes/web"
+html_assets = ["src/templates/logo.png"]
 arguments = ["--demo-capture"]
 
 [compatibility]
@@ -521,6 +538,10 @@ allow_warnings = ["web.native"]
         assert_eq!(
             config.targets.web.runtime_path,
             Some(PathBuf::from("runtimes/web"))
+        );
+        assert_eq!(
+            config.targets.web.html_assets,
+            vec![PathBuf::from("src/templates/logo.png")]
         );
         assert_eq!(config.targets.web.arguments, vec!["--demo-capture"]);
         assert_eq!(config.compatibility.allow_warnings, vec!["web.native"]);

@@ -66,9 +66,12 @@ Web builds now emit or copy:
 Lovely writes `Module.arguments` as `["./game.love", ...arguments]`, so a demo
 web deployment can set `arguments = ["--demo-capture"]`. Custom web templates
 can use `__GAME_TITLE__`, `__WEB_ARGUMENTS__`, and `__WEB_MEMORY__`
-placeholders. If `targets.web.html_template` is unset and the selected runtime
-bundle contains `lovely-runtime.json`, Lovely reads the bundle's `html` field
-and renders that template as `dist/web/index.html`.
+placeholders. Files referenced by a custom template, such as logos or fonts,
+belong in `targets.web.html_assets`; file entries are copied beside
+`index.html`, and directory entries are copied under their directory name. If
+`targets.web.html_template` is unset and the selected runtime bundle contains
+`lovely-runtime.json`, Lovely reads the bundle's `html` field and renders that
+template as `dist/web/index.html`.
 
 For patched or project-pinned web runtimes, set `targets.web.runtime_path` to a
 project-relative Lovely.js runtime bundle directory. This lets
