@@ -1,5 +1,4 @@
 pub mod desktop;
-pub mod switch;
 pub mod web;
 
 use crate::Result;
@@ -32,20 +31,18 @@ pub fn adapter_for(target: &str) -> Option<Box<dyn TargetAdapter>> {
         "linux" => Some(Box::new(desktop::DesktopAdapter::new(
             desktop::DesktopPlatform::Linux,
         ))),
-        "switch" => Some(Box::new(switch::SwitchAdapter)),
         _ => None,
     }
 }
 
 pub fn expand_targets(target: &str) -> Vec<&'static str> {
     match target {
-        "all" => vec!["web", "windows", "macos", "linux", "switch"],
+        "all" => vec!["web", "windows", "macos", "linux"],
         "desktop" => vec!["windows", "macos", "linux"],
         "web" => vec!["web"],
         "windows" => vec!["windows"],
         "macos" => vec!["macos"],
         "linux" => vec!["linux"],
-        "switch" => vec!["switch"],
         _ => Vec::new(),
     }
 }

@@ -4,7 +4,7 @@ use crate::check::{Diagnostic, DiagnosticReport, Severity};
 use crate::config::{Config, DesktopTargetConfig};
 use crate::fsutil;
 use crate::lockfile::LockFile;
-use crate::runtime::{RuntimeKind, RuntimeRegistry};
+use crate::runtime::{DEFAULT_CHANNEL, RuntimeKind, RuntimeRegistry};
 use crate::targets::{BuildOutput, TargetAdapter};
 use std::path::Path;
 
@@ -81,13 +81,13 @@ impl TargetAdapter for DesktopAdapter {
                 path: None,
             });
         }
-        if lock.runtime_channel != "12-preview" {
+        if lock.runtime_channel != DEFAULT_CHANNEL {
             report.push(Diagnostic {
                 id: "runtime.channel",
                 severity: Severity::Warning,
                 message: format!(
-                    "expected runtime channel 12-preview, found {}",
-                    lock.runtime_channel
+                    "expected runtime channel {}, found {}",
+                    DEFAULT_CHANNEL, lock.runtime_channel
                 ),
                 path: None,
             });
@@ -102,7 +102,12 @@ impl TargetAdapter for DesktopAdapter {
         fsutil::ensure_dir(&work)?;
 
         let love_path = work.join(format!("{}.love", config.game.id));
-        archive::create_love_archive(&source, &love_path)?;
+        archive::create_love_archive(
+            &source,
+            &love_path,
+            &config.paths.includes,
+            &config.paths.excludes,
+        )?;
 
         let cached_runtime = RuntimeRegistry::new().find(self.slug(), &lock.runtime_channel)?;
         let runtime_available =

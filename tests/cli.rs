@@ -57,6 +57,11 @@ fn builds_web_package() {
     );
     assert!(root.join("dist/web/game.love").is_file());
     assert!(root.join("dist/web/index.html").is_file());
+    assert!(root.join("dist/web/lovely-web-shims.js").is_file());
+    let index = fs::read_to_string(root.join("dist/web/index.html")).unwrap();
+    assert!(index.contains("lovely-web-shims.js"));
+    let manifest = fs::read_to_string(root.join("dist/web/lovely-runtime.txt")).unwrap();
+    assert!(manifest.contains("shims=lovely-web-shims.js"));
     assert!(fs::read_dir(root.join("dist")).unwrap().any(|entry| {
         entry
             .unwrap()
@@ -67,13 +72,136 @@ fn builds_web_package() {
 }
 
 #[test]
+fn web_build_renders_configured_arguments_into_template() {
+    let root = tempfile_dir("web-arguments");
+    copy_fixture(&root);
+    fs::create_dir_all(root.join("templates")).unwrap();
+    fs::write(
+        root.join("templates/index.html"),
+        r#"<!doctype html>
+<script>
+var Module = {
+  arguments: __WEB_ARGUMENTS__,
+  INITIAL_MEMORY: __WEB_MEMORY__
+};
+</script>
+"#,
+    )
+    .unwrap();
+
+    assert!(
+        Command::new(binary())
+            .arg("init")
+            .current_dir(&root)
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    let config = fs::read_to_string(root.join("lovely.toml")).unwrap();
+    fs::write(
+        root.join("lovely.toml"),
+        config
+            .replace(
+                "html_template = \"\"",
+                "html_template = \"templates/index.html\"",
+            )
+            .replace(
+                "arguments = []",
+                "arguments = [\"--demo-capture\", \"--seed=harbor\"]",
+            ),
+    )
+    .unwrap();
+
+    let output = Command::new(binary())
+        .args(["build", "web"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let index = fs::read_to_string(root.join("dist/web/index.html")).unwrap();
+    assert!(index.contains(r#"arguments: ["./game.love", "--demo-capture", "--seed=harbor"]"#));
+    assert!(index.contains("INITIAL_MEMORY: 67108864"));
+
+    let manifest = fs::read_to_string(root.join("dist/web/lovely-runtime.txt")).unwrap();
+    assert!(manifest.contains(r#"arguments=["./game.love", "--demo-capture", "--seed=harbor"]"#));
+}
+
+#[test]
+fn web_build_uses_configured_runtime_path_without_cache_setup() {
+    let root = tempfile_dir("web-runtime-path");
+    copy_fixture(&root);
+    fs::create_dir_all(root.join("runtimes/web")).unwrap();
+    fs::write(
+        root.join("runtimes/web/love.js"),
+        "console.log('patched runtime');\n",
+    )
+    .unwrap();
+    fs::write(root.join("runtimes/web/love.wasm"), b"wasm").unwrap();
+
+    assert!(
+        Command::new(binary())
+            .arg("init")
+            .current_dir(&root)
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    let config = fs::read_to_string(root.join("lovely.toml")).unwrap();
+    fs::write(
+        root.join("lovely.toml"),
+        config.replace("runtime_path = \"\"", "runtime_path = \"runtimes/web\""),
+    )
+    .unwrap();
+
+    let output = Command::new(binary())
+        .args(["doctor", "web"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("runtime.missing"));
+    assert!(!stdout.contains("lock.unresolved"));
+
+    let output = Command::new(binary())
+        .args(["build", "web"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(root.join("dist/web/love.js").is_file());
+    assert!(root.join("dist/web/love.wasm").is_file());
+}
+
+#[test]
 fn runtime_fetch_installs_local_runtime_and_web_build_consumes_it() {
     let root = tempfile_dir("runtime-web");
     let cache = tempfile_dir("runtime-cache");
     copy_fixture(&root);
     let runtime_dir = root.join("fake-web-runtime");
     fs::create_dir_all(&runtime_dir).unwrap();
-    fs::write(runtime_dir.join("love.js"), "console.log('love 12');\n").unwrap();
+    fs::write(
+        runtime_dir.join("love.js"),
+        "console.log('love runtime');\n",
+    )
+    .unwrap();
     fs::write(runtime_dir.join("love.wasm"), b"wasm").unwrap();
 
     assert!(
@@ -151,6 +279,66 @@ fn runtime_fetch_rejects_checksum_mismatch() {
 }
 
 #[test]
+fn build_respects_included_paths() {
+    let root = tempfile_dir("included-paths");
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::create_dir_all(root.join("assets")).unwrap();
+    fs::create_dir_all(root.join("node_modules/pkg")).unwrap();
+    fs::write(root.join("main.lua"), "-- main-marker\n").unwrap();
+    fs::write(root.join("conf.lua"), "-- conf-marker\n").unwrap();
+    fs::write(root.join("src/game.lua"), "-- src-marker\n").unwrap();
+    fs::write(root.join("src/dev-tool.lua"), "-- excluded-src-marker\n").unwrap();
+    fs::write(root.join("assets/sprite.txt"), "asset-marker\n").unwrap();
+    fs::write(
+        root.join("node_modules/pkg/tool.lua"),
+        "-- excluded-marker\n",
+    )
+    .unwrap();
+
+    assert!(
+        Command::new(binary())
+            .arg("init")
+            .current_dir(&root)
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    let config = fs::read_to_string(root.join("lovely.toml")).unwrap();
+    fs::write(
+        root.join("lovely.toml"),
+        config
+            .replace(
+                "includes = [\"**/*\"]",
+                "includes = [\"main.lua\", \"conf.lua\", \"src/**\", \"assets/**\"]",
+            )
+            .replace(
+                "excludes = [\"node_modules/**\"]",
+                "excludes = [\"node_modules/**\", \"src/dev-tool.lua\"]",
+            ),
+    )
+    .unwrap();
+
+    let output = Command::new(binary())
+        .args(["build", "web"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let love = fs::read(root.join("dist/web/game.love")).unwrap();
+    assert!(contains_bytes(&love, b"main-marker"));
+    assert!(contains_bytes(&love, b"src-marker"));
+    assert!(contains_bytes(&love, b"asset-marker"));
+    assert!(!contains_bytes(&love, b"excluded-marker"));
+    assert!(!contains_bytes(&love, b"excluded-src-marker"));
+}
+
+#[test]
 fn check_finds_web_ffi() {
     let root = tempfile_dir("check");
     fs::create_dir_all(&root).unwrap();
@@ -176,17 +364,66 @@ fn check_finds_web_ffi() {
     assert!(stdout.contains("web.ffi") || stderr.contains("web.ffi"));
 }
 
-#[cfg(unix)]
 #[test]
-fn builds_switch_with_bundler_mode_and_fake_devkit_tools() {
-    use std::os::unix::fs::PermissionsExt;
+fn check_warns_about_lovejs_porting_hazards() {
+    let root = tempfile_dir("check-porting-hazards");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        root.join("main.lua"),
+        r#"
+local bit = require('bit')
+local values = unpack(items)
+love.audio.play(sound)
+local shader = love.graphics.newShader("varying vec2 v; void effect() {}")
+"#,
+    )
+    .unwrap();
+    assert!(
+        Command::new(binary())
+            .arg("init")
+            .current_dir(&root)
+            .status()
+            .unwrap()
+            .success()
+    );
 
-    let root = tempfile_dir("switch");
-    copy_fixture(&root);
-    fs::create_dir_all(root.join("runtimes/switch")).unwrap();
-    fs::create_dir_all(root.join("assets/brand")).unwrap();
-    fs::write(root.join("runtimes/switch/lovepotion.elf"), b"ELF").unwrap();
-    fs::write(root.join("assets/brand/switch-icon.jpg"), b"JPEG").unwrap();
+    let output = Command::new(binary())
+        .args(["check", "web"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("web.bit_module"));
+    assert!(stdout.contains("web.lua52_unpack"));
+    assert!(stdout.contains("web.module_audio"));
+    assert!(stdout.contains("web.shader_varying"));
+}
+
+#[test]
+fn check_respects_included_paths() {
+    let root = tempfile_dir("check-included-paths");
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::create_dir_all(root.join("src/dev")).unwrap();
+    fs::create_dir_all(root.join("node_modules/pkg")).unwrap();
+    fs::write(root.join("main.lua"), "require('src.game')\n").unwrap();
+    fs::write(root.join("src/game.lua"), "return {}\n").unwrap();
+    fs::write(
+        root.join("src/dev/native.lua"),
+        "local ffi = require('ffi')\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("node_modules/pkg/native.lua"),
+        "local ffi = require('ffi')\n",
+    )
+    .unwrap();
 
     assert!(
         Command::new(binary())
@@ -202,29 +439,18 @@ fn builds_switch_with_bundler_mode_and_fake_devkit_tools() {
         root.join("lovely.toml"),
         config
             .replace(
-                "lovepotion_elf = \"\"",
-                "lovepotion_elf = \"runtimes/switch/lovepotion.elf\"",
+                "includes = [\"**/*\"]",
+                "includes = [\"main.lua\", \"src/**\"]",
             )
-            .replace("icon = \"\"", "icon = \"assets/brand/switch-icon.jpg\""),
+            .replace(
+                "excludes = [\"node_modules/**\"]",
+                "excludes = [\"node_modules/**\", \"src/dev/**\"]",
+            ),
     )
     .unwrap();
 
-    let tools = root.join("fake-tools");
-    fs::create_dir_all(&tools).unwrap();
-    write_executable(
-        &tools.join("nacptool"),
-        "#!/bin/sh\nfor last do true; done\nprintf NACP > \"$last\"\n",
-    );
-    write_executable(&tools.join("elf2nro"), "#!/bin/sh\ncp \"$1\" \"$2\"\n");
-
-    let path = format!(
-        "{}:{}",
-        tools.display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
     let output = Command::new(binary())
-        .args(["build", "switch"])
-        .env("PATH", path)
+        .args(["check", "web"])
         .current_dir(&root)
         .output()
         .unwrap();
@@ -235,29 +461,6 @@ fn builds_switch_with_bundler_mode_and_fake_devkit_tools() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-
-    let final_nro = fs::read_dir(root.join("dist/switch"))
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .find(|path| {
-            path.extension().and_then(|ext| ext.to_str()) == Some("nro")
-                && !path
-                    .file_name()
-                    .unwrap()
-                    .to_string_lossy()
-                    .contains("-base")
-        })
-        .unwrap();
-    let nro = fs::read(final_nro).unwrap();
-    assert!(nro.starts_with(b"ELF"));
-    assert!(nro.windows(4).any(|window| window == b"PK\x03\x04"));
-
-    fn write_executable(path: &Path, contents: &str) {
-        fs::write(path, contents).unwrap();
-        let mut permissions = fs::metadata(path).unwrap().permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(path, permissions).unwrap();
-    }
 }
 
 fn tempfile_dir(name: &str) -> std::path::PathBuf {
@@ -276,4 +479,10 @@ fn unique_suffix() -> u128 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos()
+}
+
+fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack
+        .windows(needle.len())
+        .any(|window| window == needle)
 }

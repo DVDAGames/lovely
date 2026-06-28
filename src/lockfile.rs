@@ -11,7 +11,6 @@ pub struct LockFile {
     pub runtime_channel: String,
     pub love: LockedComponent,
     pub emscripten: LockedComponent,
-    pub lovepotion: LockedComponent,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,7 +24,7 @@ impl LockFile {
     pub fn preview_default() -> Self {
         Self {
             schema: 1,
-            runtime_channel: "12-preview".to_string(),
+            runtime_channel: "love-11-plus".to_string(),
             love: LockedComponent {
                 source: "https://github.com/love2d/love".to_string(),
                 revision: "main".to_string(),
@@ -34,11 +33,6 @@ impl LockFile {
             emscripten: LockedComponent {
                 source: "emsdk".to_string(),
                 revision: "pinned-by-runtime-manifest".to_string(),
-                sha256: "unresolved".to_string(),
-            },
-            lovepotion: LockedComponent {
-                source: "https://github.com/lovebrew/lovepotion".to_string(),
-                revision: "3.0.2".to_string(),
                 sha256: "unresolved".to_string(),
             },
         }
@@ -82,11 +76,6 @@ impl LockFile {
                 revision: take(&values, "emscripten.revision")?,
                 sha256: take(&values, "emscripten.sha256")?,
             },
-            lovepotion: LockedComponent {
-                source: take(&values, "lovepotion.source")?,
-                revision: take(&values, "lovepotion.revision")?,
-                sha256: take(&values, "lovepotion.sha256")?,
-            },
         })
     }
 
@@ -103,10 +92,6 @@ love.sha256 = "{love_sha}"
 emscripten.source = "{emscripten_source}"
 emscripten.revision = "{emscripten_revision}"
 emscripten.sha256 = "{emscripten_sha}"
-
-lovepotion.source = "{lovepotion_source}"
-lovepotion.revision = "{lovepotion_revision}"
-lovepotion.sha256 = "{lovepotion_sha}"
 "#,
             schema = self.schema,
             runtime_channel = escape(&self.runtime_channel),
@@ -116,14 +101,11 @@ lovepotion.sha256 = "{lovepotion_sha}"
             emscripten_source = escape(&self.emscripten.source),
             emscripten_revision = escape(&self.emscripten.revision),
             emscripten_sha = escape(&self.emscripten.sha256),
-            lovepotion_source = escape(&self.lovepotion.source),
-            lovepotion_revision = escape(&self.lovepotion.revision),
-            lovepotion_sha = escape(&self.lovepotion.sha256),
         )
     }
 
     pub fn has_unresolved_checksums(&self) -> bool {
-        [&self.love, &self.emscripten, &self.lovepotion]
+        [&self.love, &self.emscripten]
             .iter()
             .any(|component| component.sha256 == "unresolved")
     }

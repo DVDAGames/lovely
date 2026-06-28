@@ -82,22 +82,16 @@ pub fn check_project(root: &Path, config: &Config, targets: &[String]) -> Result
 
     let mut report = DiagnosticReport::default();
     let requested = if targets.is_empty() {
-        vec![
-            "web".to_string(),
-            "switch".to_string(),
-            "desktop".to_string(),
-        ]
+        vec!["web".to_string(), "desktop".to_string()]
     } else {
         targets.to_vec()
     };
 
-    let files = fsutil::collect_files(&source)?;
+    let files =
+        fsutil::collect_included_files(&source, &config.paths.includes, &config.paths.excludes)?;
     let wants_web = requested
         .iter()
         .any(|target| target == "web" || target == "all");
-    let wants_switch = requested
-        .iter()
-        .any(|target| target == "switch" || target == "all");
 
     for file in files {
         let Some(ext) = file.extension().and_then(|ext| ext.to_str()) else {
@@ -110,9 +104,6 @@ pub fn check_project(root: &Path, config: &Config, targets: &[String]) -> Result
         let text = fs::read_to_string(&file).map_err(|err| LovelyError::io(&file, err))?;
         if wants_web {
             check_web_lua(&mut report, config, &file, &text);
-        }
-        if wants_switch {
-            check_switch_lua(&mut report, config, &file, &text);
         }
     }
 
@@ -152,38 +143,66 @@ fn check_web_lua(report: &mut DiagnosticReport, config: &Config, path: &Path, te
             );
         }
     }
-}
 
-fn check_switch_lua(report: &mut DiagnosticReport, config: &Config, path: &Path, text: &str) {
-    for needle in ["newShader", "love.graphics.setShader"] {
+    if text.contains("unpack(") && !text.contains("table.unpack(") {
+        push_unless_allowed(
+            report,
+            config,
+            Diagnostic {
+                id: "web.lua52_unpack",
+                severity: Severity::Warning,
+                message: "some LÖVE web runtimes use Lua 5.2+ semantics; prefer table.unpack over global unpack.".to_string(),
+                path: Some(path.to_path_buf()),
+            },
+        );
+    }
+
+    if text.contains("require(\"bit\")")
+        || text.contains("require 'bit'")
+        || text.contains("require('bit')")
+    {
+        push_unless_allowed(
+            report,
+            config,
+            Diagnostic {
+                id: "web.bit_module",
+                severity: Severity::Warning,
+                message: "bit may be unavailable in some LÖVE web runtimes; use bit32 or a compatibility shim.".to_string(),
+                path: Some(path.to_path_buf()),
+            },
+        );
+    }
+
+    for needle in ["love.audio.play(", "love.audio.stop(", "love.audio.pause("] {
         if text.contains(needle) {
             push_unless_allowed(
                 report,
                 config,
                 Diagnostic {
-                    id: "switch.shader",
+                    id: "web.module_audio",
                     severity: Severity::Warning,
-                    message: "LÖVE Potion compatibility docs list shader support as unavailable or limited; gate this code per platform.".to_string(),
+                    message: format!(
+                        "{needle} has crashed in some love.js builds; prefer Source methods like source:play()."
+                    ),
                     path: Some(path.to_path_buf()),
                 },
             );
         }
     }
 
-    for needle in ["love.video", "newVideo"] {
-        if text.contains(needle) {
-            push_unless_allowed(
-                report,
-                config,
-                Diagnostic {
-                    id: "switch.video",
-                    severity: Severity::Warning,
-                    message: "video APIs are a likely Switch homebrew portability issue."
+    if text.contains("newShader") && text.contains("varying") {
+        push_unless_allowed(
+            report,
+            config,
+            Diagnostic {
+                id: "web.shader_varying",
+                severity: Severity::Warning,
+                message:
+                    "custom shader varyings may need hoisting for strict WebGL implementations."
                         .to_string(),
-                    path: Some(path.to_path_buf()),
-                },
-            );
-        }
+                path: Some(path.to_path_buf()),
+            },
+        );
     }
 }
 

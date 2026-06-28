@@ -29,6 +29,7 @@ pub struct PathConfig {
     pub output: PathBuf,
     pub icon: Option<PathBuf>,
     pub includes: Vec<String>,
+    pub excludes: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,7 +38,6 @@ pub struct TargetsConfig {
     pub windows: DesktopTargetConfig,
     pub macos: DesktopTargetConfig,
     pub linux: DesktopTargetConfig,
-    pub switch: SwitchTargetConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,23 +45,15 @@ pub struct WebTargetConfig {
     pub enabled: bool,
     pub variant: String,
     pub html_template: Option<PathBuf>,
+    pub runtime_path: Option<PathBuf>,
     pub memory_bytes: u64,
+    pub arguments: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DesktopTargetConfig {
     pub enabled: bool,
     pub runtime_archive: Option<PathBuf>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SwitchTargetConfig {
-    pub enabled: bool,
-    pub mode: String,
-    pub lovepotion_elf: Option<PathBuf>,
-    pub lovepotion_nro: Option<PathBuf>,
-    pub icon: Option<PathBuf>,
-    pub title_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -116,6 +108,7 @@ impl Config {
                 output: PathBuf::from("dist"),
                 icon: Some(PathBuf::from("assets/icon.png")),
                 includes: vec!["**/*".to_string()],
+                excludes: vec!["node_modules/**".to_string()],
             },
             targets: TargetsConfig::default(),
             itch: ItchConfig {
@@ -184,13 +177,15 @@ impl Config {
             if let Some(includes) = get_string_array(paths, "includes")? {
                 config.paths.includes = includes;
             }
+            if let Some(excludes) = get_string_array(paths, "excludes")? {
+                config.paths.excludes = excludes;
+            }
         }
 
         apply_web(&mut config, table.get("targets.web"))?;
         apply_desktop(&mut config.targets.windows, table.get("targets.windows"));
         apply_desktop(&mut config.targets.macos, table.get("targets.macos"));
         apply_desktop(&mut config.targets.linux, table.get("targets.linux"));
-        apply_switch(&mut config.targets.switch, table.get("targets.switch"));
 
         if let Some(itch) = table.get("itch") {
             config.itch.project = get_optional_string(itch, "project", config.itch.project);
@@ -235,11 +230,6 @@ impl Config {
                 "targets.web.variant must be web-compat or web-threaded".to_string(),
             ));
         }
-        if !matches!(self.targets.switch.mode.as_str(), "bundler" | "fuse") {
-            return Err(LovelyError::Config(
-                "targets.switch.mode must be bundler or fuse".to_string(),
-            ));
-        }
         Ok(())
     }
 
@@ -255,13 +245,16 @@ author = "{author}"
 source = "{source}"
 output = "{output}"
 icon = {icon}
-includes = ["**/*"]
+includes = {includes}
+excludes = {excludes}
 
 [targets.web]
 enabled = true
 variant = "web-compat"
 memory_bytes = 67108864
 html_template = ""
+runtime_path = {runtime_path}
+arguments = {arguments}
 
 [targets.windows]
 enabled = true
@@ -274,14 +267,6 @@ runtime_archive = ""
 [targets.linux]
 enabled = true
 runtime_archive = ""
-
-[targets.switch]
-enabled = true
-mode = "bundler"
-lovepotion_elf = ""
-lovepotion_nro = ""
-icon = ""
-title_id = "0x010444C0DE000000"
 
 [itch]
 project = ""
@@ -308,7 +293,17 @@ allow_warnings = []
                 .icon
                 .as_ref()
                 .map(|path| format!("\"{}\"", escape(&fsutil::normalize_slashes(path))))
-                .unwrap_or_else(|| "\"\"".to_string())
+                .unwrap_or_else(|| "\"\"".to_string()),
+            runtime_path = self
+                .targets
+                .web
+                .runtime_path
+                .as_ref()
+                .map(|path| format!("\"{}\"", escape(&fsutil::normalize_slashes(path))))
+                .unwrap_or_else(|| "\"\"".to_string()),
+            includes = format_string_array(&self.paths.includes),
+            excludes = format_string_array(&self.paths.excludes),
+            arguments = format_string_array(&self.targets.web.arguments)
         )
     }
 }
@@ -320,7 +315,9 @@ impl Default for TargetsConfig {
                 enabled: true,
                 variant: "web-compat".to_string(),
                 html_template: None,
+                runtime_path: None,
                 memory_bytes: 67_108_864,
+                arguments: Vec::new(),
             },
             windows: DesktopTargetConfig {
                 enabled: true,
@@ -333,14 +330,6 @@ impl Default for TargetsConfig {
             linux: DesktopTargetConfig {
                 enabled: true,
                 runtime_archive: None,
-            },
-            switch: SwitchTargetConfig {
-                enabled: true,
-                mode: "bundler".to_string(),
-                lovepotion_elf: None,
-                lovepotion_nro: None,
-                icon: None,
-                title_id: "0x010444C0DE000000".to_string(),
             },
         }
     }
@@ -358,8 +347,16 @@ fn apply_web(config: &mut Config, values: Option<&BTreeMap<String, String>>) -> 
         "html_template",
         config.targets.web.html_template.clone(),
     );
+    config.targets.web.runtime_path = get_optional_path(
+        values,
+        "runtime_path",
+        config.targets.web.runtime_path.clone(),
+    );
     if let Some(memory) = values.get("memory_bytes") {
         config.targets.web.memory_bytes = parse_integer(memory, "targets.web.memory_bytes")?;
+    }
+    if let Some(arguments) = get_string_array(values, "arguments")? {
+        config.targets.web.arguments = arguments;
     }
     Ok(())
 }
@@ -371,20 +368,6 @@ fn apply_desktop(config: &mut DesktopTargetConfig, values: Option<&BTreeMap<Stri
     config.enabled = get_bool(values, "enabled").unwrap_or(config.enabled);
     config.runtime_archive =
         get_optional_path(values, "runtime_archive", config.runtime_archive.clone());
-}
-
-fn apply_switch(config: &mut SwitchTargetConfig, values: Option<&BTreeMap<String, String>>) {
-    let Some(values) = values else {
-        return;
-    };
-    config.enabled = get_bool(values, "enabled").unwrap_or(config.enabled);
-    config.mode = get_string(values, "mode").unwrap_or(config.mode.clone());
-    config.lovepotion_elf =
-        get_optional_path(values, "lovepotion_elf", config.lovepotion_elf.clone());
-    config.lovepotion_nro =
-        get_optional_path(values, "lovepotion_nro", config.lovepotion_nro.clone());
-    config.icon = get_optional_path(values, "icon", config.icon.clone());
-    config.title_id = get_string(values, "title_id").unwrap_or(config.title_id.clone());
 }
 
 fn get_string(values: &BTreeMap<String, String>, key: &str) -> Option<String> {
@@ -500,6 +483,15 @@ fn escape(input: &str) -> String {
     input.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+fn format_string_array(values: &[String]) -> String {
+    let values = values
+        .iter()
+        .map(|value| format!("\"{}\"", escape(value)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("[{values}]")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -515,15 +507,36 @@ author = "Team"
 
 [targets.web]
 variant = "web-threaded"
+runtime_path = "runtimes/web"
+arguments = ["--demo-capture"]
 
 [compatibility]
-allow_warnings = ["switch.shader"]
+allow_warnings = ["web.native"]
 "#,
         )
         .unwrap();
 
         assert_eq!(config.game.id, "sailman");
         assert_eq!(config.targets.web.variant, "web-threaded");
-        assert_eq!(config.compatibility.allow_warnings, vec!["switch.shader"]);
+        assert_eq!(
+            config.targets.web.runtime_path,
+            Some(PathBuf::from("runtimes/web"))
+        );
+        assert_eq!(config.targets.web.arguments, vec!["--demo-capture"]);
+        assert_eq!(config.compatibility.allow_warnings, vec!["web.native"]);
+    }
+
+    #[test]
+    fn parses_path_excludes() {
+        let config = Config::parse(
+            r#"[paths]
+includes = ["main.lua", "src/**"]
+excludes = ["src/dev/**"]
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.paths.includes, vec!["main.lua", "src/**"]);
+        assert_eq!(config.paths.excludes, vec!["src/dev/**"]);
     }
 }

@@ -3,6 +3,6 @@ name = "lovely"
 version = "0.1.0"
 edition = "2024"
 license = "GPL-3.0-only"
-description = "A LÖVE 12 distribution toolchain for web, desktop, Steam, and Nintendo Switch homebrew."
+description = "A LÖVE >= 11 distribution toolchain for web, desktop, and Steam builds."
 
 [dependencies]

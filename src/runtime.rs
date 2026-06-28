@@ -5,7 +5,7 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-pub const DEFAULT_CHANNEL: &str = "12-preview";
+pub const DEFAULT_CHANNEL: &str = "love-11-plus";
 pub const MANIFEST_FILE: &str = "runtime.txt";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -248,9 +248,9 @@ pub fn cache_dir() -> PathBuf {
 
 pub fn validate_target(target: &str) -> Result<()> {
     match target {
-        "web" | "windows" | "macos" | "linux" | "switch" => Ok(()),
+        "web" | "windows" | "macos" | "linux" => Ok(()),
         _ => Err(LovelyError::Command(format!(
-            "unknown runtime target {target:?}; expected web, windows, macos, linux, or switch"
+            "unknown runtime target {target:?}; expected web, windows, macos, or linux"
         ))),
     }
 }

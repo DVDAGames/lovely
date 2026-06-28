@@ -62,7 +62,7 @@ fn runtime_command(args: &[String]) -> Result<()> {
 fn runtime_fetch(args: &[String]) -> Result<()> {
     if args.len() < 2 {
         return Err(LovelyError::Command(
-            "usage: lovely runtime fetch <target> <local-path> [--channel 12-preview] [--sha256 <hex>]".to_string(),
+            "usage: lovely runtime fetch <target> <local-path> [--channel love-11-plus] [--sha256 <hex>]".to_string(),
         ));
     }
 
@@ -121,7 +121,7 @@ fn runtime_fetch(args: &[String]) -> Result<()> {
 fn runtime_doctor(target: Option<&str>) -> Result<()> {
     let registry = RuntimeRegistry::new();
     let targets = match target {
-        Some("all") | None => vec!["web", "windows", "macos", "linux", "switch"],
+        Some("all") | None => vec!["web", "windows", "macos", "linux"],
         Some(target) => vec![target],
     };
 
@@ -360,7 +360,7 @@ fn load_lock(root: &Path) -> Result<LockFile> {
 
 fn unknown_target(target: &str) -> LovelyError {
     LovelyError::Command(format!(
-        "unknown target {target:?}; expected web, windows, macos, linux, switch, desktop, or all"
+        "unknown target {target:?}; expected web, windows, macos, linux, desktop, or all"
     ))
 }
 
@@ -410,28 +410,12 @@ jobs:
         with:
           name: lovely-${{ matrix.target }}
           path: dist/**
-
-  switch:
-    runs-on: ubuntu-latest
-    container: devkitpro/devkita64:latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - run: cargo build --release
-      - run: ./target/release/lovely check switch
-      - run: ./target/release/lovely doctor switch
-      - run: ./target/release/lovely build switch
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: lovely-switch
-          path: dist/switch/**
 "#
 }
 
 fn print_help() {
     println!(
-        r#"Lovely — unified LÖVE 12 distribution toolchain
+        r#"Lovely — unified LÖVE >= 11 distribution toolchain
 
 Usage:
   lovely init
@@ -439,16 +423,15 @@ Usage:
   lovely doctor [target]
   lovely check [target...]
   lovely runtime <fetch|doctor|list|cache-dir>
-  lovely build [web|windows|macos|linux|switch|desktop|all]
+  lovely build [web|windows|macos|linux|desktop|all]
   lovely publish itch
   lovely ci github
 
 Targets:
-  web       Itch.io-ready web package shell using pinned LÖVE 12 runtime metadata
+  web       Itch.io-ready web package shell using pinned LÖVE runtime metadata
   windows   Steam-ready Windows artifact skeleton
   macos     Steam-ready macOS artifact skeleton
   linux     Steam-ready Linux artifact skeleton
-  switch    Nintendo Switch homebrew .nro via LÖVE Potion ELF, NACP metadata, and elf2nro
 "#
     );
 }
@@ -458,13 +441,13 @@ fn print_runtime_help() {
         r#"Lovely runtime registry
 
 Usage:
-  lovely runtime fetch <target> <local-path> [--channel 12-preview] [--sha256 <hex>]
+  lovely runtime fetch <target> <local-path> [--channel love-11-plus] [--sha256 <hex>]
   lovely runtime doctor [target|all]
   lovely runtime list
   lovely runtime cache-dir
 
 Targets:
-  web windows macos linux switch
+  web windows macos linux
 
 Notes:
   `fetch` currently installs a local runtime file or directory into the Lovely

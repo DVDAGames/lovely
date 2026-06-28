@@ -21,9 +21,14 @@ impl ArchiveEntry {
     }
 }
 
-pub fn create_love_archive(source: &Path, output: &Path) -> Result<Vec<ArchiveEntry>> {
+pub fn create_love_archive(
+    source: &Path,
+    output: &Path,
+    includes: &[String],
+    excludes: &[String],
+) -> Result<Vec<ArchiveEntry>> {
     let mut entries = Vec::new();
-    for file in fsutil::collect_files(source)? {
+    for file in fsutil::collect_included_files(source, includes, excludes)? {
         let rel = fsutil::relative_path(source, &file)?;
         let name = fsutil::normalize_slashes(&rel);
         validate_archive_name(&name)?;
