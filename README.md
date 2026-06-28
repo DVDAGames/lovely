@@ -89,10 +89,15 @@ runtime_path = "runtimes/web"
 arguments = ["--demo-capture"]
 ```
 
-Use `runtime_path` for project-pinned Lovely.js runtime bundles. Lovely copies
-the runtime files into `dist/web` and the upload ZIP during `lovely build web`,
-while rendering `index.html` from either the project template or the bundle
-default.
+Lovely resolves the managed Lovely.js runtime bundle from `targets.web.variant`
+when `runtime_path` is unset. Use `runtime_path` only to override that default
+with a project-pinned bundle. Lovely copies runtime files into `dist/web` and
+the upload ZIP during `lovely build web`, while rendering `index.html` from
+either the project template or the bundle default. If `runtime_path` points at a
+missing `lovely.js/dist/<variant>` checkout, Lovely restores the Lovely.js
+repository, runs its build, and uses the generated bundle. Set `LOVELY_JS_PATH`
+to use an existing local Lovely.js checkout, or `LOVELY_JS_REF` to pin the
+restored checkout ref in CI.
 
 Itch.io publishes use Butler. Set `[itch].project` to your Itch project
 slug, then run `lovely publish itch staging` for `prerelease_channel` or

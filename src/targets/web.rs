@@ -4,9 +4,12 @@ use crate::check::{Diagnostic, DiagnosticReport, Severity};
 use crate::config::Config;
 use crate::fsutil;
 use crate::lockfile::LockFile;
-use crate::runtime::{DEFAULT_CHANNEL, RuntimeKind, RuntimeRegistry};
+use crate::runtime::{DEFAULT_CHANNEL, RuntimeKind, RuntimeRegistry, cache_dir};
 use crate::targets::{BuildOutput, TargetAdapter};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+const LOVELY_JS_REPOSITORY: &str = "https://github.com/DVDAGames/lovely.js.git";
 
 pub struct WebAdapter;
 
@@ -48,26 +51,38 @@ impl TargetAdapter for WebAdapter {
         if let Some(runtime_path) = configured_runtime {
             let runtime_path = root.join(runtime_path);
             if !runtime_path.exists() {
-                report.push(Diagnostic {
-                    id: "runtime.missing",
-                    severity: Severity::Error,
-                    message: format!(
-                        "configured web runtime_path does not exist: {}",
-                        runtime_path.display()
-                    ),
-                    path: Some(runtime_path),
-                });
+                if is_lovely_js_runtime_path(&runtime_path, &config.targets.web.variant) {
+                    report.push(Diagnostic {
+                        id: "runtime.restorable",
+                        severity: Severity::Warning,
+                        message: format!(
+                            "configured Lovely.js runtime_path does not exist yet; lovely build web will restore it: {}",
+                            runtime_path.display()
+                        ),
+                        path: Some(runtime_path),
+                    });
+                } else {
+                    report.push(Diagnostic {
+                        id: "runtime.missing",
+                        severity: Severity::Error,
+                        message: format!(
+                            "configured web runtime_path does not exist: {}",
+                            runtime_path.display()
+                        ),
+                        path: Some(runtime_path),
+                    });
+                }
             }
         } else if RuntimeRegistry::new()
             .find("web", &lock.runtime_channel)?
             .is_none()
         {
             report.push(Diagnostic {
-                id: "runtime.missing",
+                id: "runtime.restorable",
                 severity: Severity::Warning,
                 message: format!(
-                    "no cached web runtime for {}; run lovely runtime fetch web <path>",
-                    lock.runtime_channel
+                    "no cached web runtime for {}; lovely build web will restore the managed Lovely.js {} runtime",
+                    lock.runtime_channel, config.targets.web.variant
                 ),
                 path: None,
             });
@@ -166,7 +181,7 @@ impl TargetAdapter for WebAdapter {
 
 struct WebRuntime {
     kind: RuntimeKind,
-    path: std::path::PathBuf,
+    path: PathBuf,
 }
 
 fn configured_web_runtime(root: &Path, config: &Config) -> Result<Option<WebRuntime>> {
@@ -175,10 +190,7 @@ fn configured_web_runtime(root: &Path, config: &Config) -> Result<Option<WebRunt
     };
     let path = root.join(path);
     if !path.exists() {
-        return Err(crate::LovelyError::Command(format!(
-            "configured web runtime path does not exist: {}",
-            path.display()
-        )));
+        return restore_lovely_js_runtime(&path, &config.targets.web.variant).map(Some);
     }
     Ok(Some(WebRuntime {
         kind: if path.is_dir() {
@@ -190,6 +202,176 @@ fn configured_web_runtime(root: &Path, config: &Config) -> Result<Option<WebRunt
     }))
 }
 
+fn restore_lovely_js_runtime(path: &Path, variant: &str) -> Result<WebRuntime> {
+    if let Some(runtime) = runtime_from_lovely_js_path_override(variant)? {
+        return Ok(runtime);
+    }
+
+    if !is_lovely_js_runtime_path(path, variant) {
+        return Err(crate::LovelyError::Command(format!(
+            "configured web runtime path does not exist: {}",
+            path.display()
+        )));
+    }
+
+    let repo = lovely_js_repo_from_runtime_path(path).ok_or_else(|| {
+        crate::LovelyError::Command(format!(
+            "could not infer Lovely.js checkout root from {}",
+            path.display()
+        ))
+    })?;
+    checkout_lovely_js(&repo)?;
+    build_lovely_js(&repo)?;
+    runtime_from_lovely_js_repo(&repo, variant)
+}
+
+fn runtime_from_lovely_js_path_override(variant: &str) -> Result<Option<WebRuntime>> {
+    let Some(path) = std::env::var_os("LOVELY_JS_PATH") else {
+        return Ok(None);
+    };
+
+    let repo = PathBuf::from(path);
+    let runtime = repo.join("dist").join(variant);
+    if !runtime.exists() {
+        build_lovely_js(&repo)?;
+    }
+    Ok(Some(runtime_from_lovely_js_repo(&repo, variant)?))
+}
+
+fn managed_lovely_js_runtime(variant: &str) -> Result<WebRuntime> {
+    if let Some(runtime) = runtime_from_lovely_js_path_override(variant)? {
+        return Ok(runtime);
+    }
+
+    let repo = cache_dir().join("tools/lovely.js");
+    checkout_lovely_js(&repo)?;
+    build_lovely_js(&repo)?;
+    runtime_from_lovely_js_repo(&repo, variant)
+}
+
+fn runtime_from_lovely_js_repo(repo: &Path, variant: &str) -> Result<WebRuntime> {
+    let runtime = repo.join("dist").join(variant);
+    if !runtime.exists() {
+        return Err(crate::LovelyError::Command(format!(
+            "Lovely.js runtime bundle does not exist after restore: {}",
+            runtime.display()
+        )));
+    }
+    Ok(WebRuntime {
+        kind: if runtime.is_dir() {
+            RuntimeKind::Directory
+        } else {
+            RuntimeKind::File
+        },
+        path: runtime,
+    })
+}
+
+fn checkout_lovely_js(repo: &Path) -> Result<()> {
+    if repo.join(".git").is_dir() {
+        return Ok(());
+    }
+
+    let source =
+        std::env::var("LOVELY_JS_REPOSITORY").unwrap_or_else(|_| LOVELY_JS_REPOSITORY.to_string());
+    let ref_name = std::env::var("LOVELY_JS_REF").unwrap_or_else(|_| "main".to_string());
+    if let Some(parent) = repo.parent() {
+        fsutil::ensure_dir(parent)?;
+    }
+
+    run_tool(
+        Command::new("git")
+            .arg("clone")
+            .arg("--depth")
+            .arg("1")
+            .arg(&source)
+            .arg(repo),
+        "clone Lovely.js runtime repository",
+    )?;
+    run_tool(
+        Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .arg("fetch")
+            .arg("--depth")
+            .arg("1")
+            .arg("origin")
+            .arg(&ref_name),
+        "fetch Lovely.js runtime ref",
+    )?;
+    run_tool(
+        Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .arg("checkout")
+            .arg("--force")
+            .arg("FETCH_HEAD"),
+        "checkout Lovely.js runtime ref",
+    )
+}
+
+fn build_lovely_js(repo: &Path) -> Result<()> {
+    if !repo.join("package.json").is_file() {
+        return Err(crate::LovelyError::Command(format!(
+            "Lovely.js checkout is missing package.json: {}",
+            repo.display()
+        )));
+    }
+
+    let install_command = if repo.join("package-lock.json").is_file() {
+        "ci"
+    } else {
+        "install"
+    };
+    run_tool(
+        Command::new("npm").arg(install_command).current_dir(repo),
+        "install Lovely.js dependencies",
+    )?;
+    run_tool(
+        Command::new("npm")
+            .arg("run")
+            .arg("build")
+            .current_dir(repo),
+        "build Lovely.js runtime bundles",
+    )
+}
+
+fn run_tool(command: &mut Command, action: &str) -> Result<()> {
+    let output = command.output().map_err(|err| {
+        crate::LovelyError::Command(format!(
+            "could not {action}; required tool failed to start: {err}"
+        ))
+    })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(crate::LovelyError::Command(format!(
+            "could not {action}; command exited with status {}; {}",
+            output.status,
+            stderr.trim()
+        )));
+    }
+    Ok(())
+}
+
+fn is_lovely_js_runtime_path(path: &Path, variant: &str) -> bool {
+    path.file_name().and_then(|name| name.to_str()) == Some(variant)
+        && path
+            .parent()
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str())
+            == Some("dist")
+        && path
+            .parent()
+            .and_then(Path::parent)
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str())
+            == Some("lovely.js")
+}
+
+fn lovely_js_repo_from_runtime_path(path: &Path) -> Option<PathBuf> {
+    path.parent()?.parent().map(Path::to_path_buf)
+}
+
 fn selected_web_runtime(
     root: &Path,
     config: &Config,
@@ -198,12 +380,15 @@ fn selected_web_runtime(
     if let Some(runtime) = configured_web_runtime(root, config)? {
         return Ok(Some(runtime));
     }
-    Ok(RuntimeRegistry::new()
-        .find("web", &lock.runtime_channel)?
-        .map(|runtime| WebRuntime {
+    if let Some(runtime) = RuntimeRegistry::new().find("web", &lock.runtime_channel)? {
+        return Ok(Some(WebRuntime {
             kind: runtime.manifest.kind,
             path: runtime.path,
-        }))
+        }));
+    }
+    Ok(Some(managed_lovely_js_runtime(
+        &config.targets.web.variant,
+    )?))
 }
 
 fn copy_runtime_into_output(kind: RuntimeKind, path: &Path, output: &Path) -> Result<()> {

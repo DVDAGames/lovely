@@ -73,12 +73,20 @@ belong in `targets.web.html_assets`; file entries are copied beside
 `lovely-runtime.json`, Lovely reads the bundle's `html` field and renders that
 template as `dist/web/index.html`.
 
-For patched or project-pinned web runtimes, set `targets.web.runtime_path` to a
-project-relative Lovely.js runtime bundle directory. This lets
-`lovely build web` include the runtime directly from the game repository or
-restored release artifact without a separate `lovely runtime fetch` setup step.
-The global runtime cache remains useful for shared machine-local tooling, but
-release-oriented game repos should prefer explicit runtime pins.
+By default, `lovely build web` resolves the managed Lovely.js runtime bundle
+from `targets.web.variant`. For patched or project-pinned web runtimes, set
+`targets.web.runtime_path` to a project-relative Lovely.js runtime bundle
+directory. This lets `lovely build web` include runtime files directly from the
+game repository or restored release artifact without a separate
+`lovely runtime fetch` setup step.
+
+If the configured path points at a missing `lovely.js/dist/<variant>` checkout,
+or if no `runtime_path` is configured and no cached runtime exists, Lovely
+restores the Lovely.js repository, runs `npm ci`/`npm run build`, and uses the
+generated bundle. CI can set `LOVELY_JS_REF` to pin the checkout ref or
+`LOVELY_JS_PATH` to use an already-restored checkout. The global runtime cache
+remains useful for shared machine-local tooling, while `runtime_path` remains an
+escape hatch for release repos that need an explicitly vendored runtime bundle.
 
 ## Runtime Fork Checklist
 

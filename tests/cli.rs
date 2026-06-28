@@ -34,6 +34,7 @@ fn init_creates_config_and_lock() {
 #[test]
 fn builds_web_package() {
     let root = tempfile_dir("web");
+    let lovely_js = fake_lovely_js_runtime(&root);
     copy_fixture(&root);
     assert!(
         Command::new(binary())
@@ -46,6 +47,7 @@ fn builds_web_package() {
 
     let output = Command::new(binary())
         .args(["build", "web"])
+        .env("LOVELY_JS_PATH", &lovely_js)
         .current_dir(&root)
         .output()
         .unwrap();
@@ -57,9 +59,9 @@ fn builds_web_package() {
     );
     assert!(root.join("dist/web/game.love").is_file());
     assert!(root.join("dist/web/index.html").is_file());
-    assert!(!root.join("dist/web/lovely-web-shims.js").is_file());
+    assert!(root.join("dist/web/lovely-web-shims.js").is_file());
     let manifest = fs::read_to_string(root.join("dist/web/lovely-runtime.txt")).unwrap();
-    assert!(!manifest.contains("shims=lovely-web-shims.js"));
+    assert!(manifest.contains("runtime_channel=love-11-plus"));
     assert!(fs::read_dir(root.join("dist")).unwrap().any(|entry| {
         entry
             .unwrap()
@@ -72,6 +74,7 @@ fn builds_web_package() {
 #[test]
 fn web_build_renders_configured_arguments_into_template() {
     let root = tempfile_dir("web-arguments");
+    let lovely_js = fake_lovely_js_runtime(&root);
     copy_fixture(&root);
     fs::create_dir_all(root.join("templates")).unwrap();
     fs::write(
@@ -113,6 +116,7 @@ var Module = {
 
     let output = Command::new(binary())
         .args(["build", "web"])
+        .env("LOVELY_JS_PATH", &lovely_js)
         .current_dir(&root)
         .output()
         .unwrap();
@@ -133,6 +137,7 @@ var Module = {
 #[test]
 fn web_build_copies_configured_html_assets() {
     let root = tempfile_dir("web-html-assets");
+    let lovely_js = fake_lovely_js_runtime(&root);
     copy_fixture(&root);
     fs::create_dir_all(root.join("templates")).unwrap();
     fs::write(
@@ -168,6 +173,7 @@ fn web_build_copies_configured_html_assets() {
 
     let output = Command::new(binary())
         .args(["doctor", "web"])
+        .env("LOVELY_JS_PATH", &lovely_js)
         .current_dir(&root)
         .output()
         .unwrap();
@@ -180,6 +186,7 @@ fn web_build_copies_configured_html_assets() {
 
     let output = Command::new(binary())
         .args(["build", "web"])
+        .env("LOVELY_JS_PATH", &lovely_js)
         .current_dir(&root)
         .output()
         .unwrap();
@@ -264,6 +271,66 @@ fn web_build_uses_configured_runtime_path_without_cache_setup() {
     assert!(contains_bytes(&zip, b"lovely-game-loader.js"));
     assert!(contains_bytes(&zip, b"lovely-web-shims.js"));
     assert!(contains_bytes(&zip, b"lovely-runtime.json"));
+}
+
+#[test]
+fn web_build_restores_missing_lovely_js_runtime_path_from_override() {
+    let root = tempfile_dir("web-managed-lovely-js");
+    copy_fixture(&root);
+    let lovely_js = root.join("fake-lovely-js");
+    write_fake_web_runtime(&lovely_js.join("dist/web-compat"));
+
+    assert!(
+        Command::new(binary())
+            .arg("init")
+            .current_dir(&root)
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    let config = fs::read_to_string(root.join("lovely.toml")).unwrap();
+    fs::write(
+        root.join("lovely.toml"),
+        config.replace(
+            "runtime_path = \"\"",
+            "runtime_path = \"../_utils/lovely.js/dist/web-compat\"",
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(binary())
+        .args(["doctor", "web"])
+        .env("LOVELY_JS_PATH", &lovely_js)
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("runtime.restorable"));
+
+    let output = Command::new(binary())
+        .args(["build", "web"])
+        .env("LOVELY_JS_PATH", &lovely_js)
+        .current_dir(&root)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(root.join("dist/web/love.js").is_file());
+    assert!(root.join("dist/web/love.wasm").is_file());
+    assert!(root.join("dist/web/lovely-game-loader.js").is_file());
+    assert!(root.join("dist/web/lovely-web-shims.js").is_file());
 }
 
 #[test]
@@ -357,6 +424,7 @@ fn runtime_fetch_rejects_checksum_mismatch() {
 #[test]
 fn publish_itch_invokes_butler_with_explicit_targets() {
     let root = tempfile_dir("publish-itch");
+    let lovely_js = fake_lovely_js_runtime(&root);
     let cache = tempfile_dir("publish-itch-cache");
     let butler_dir = tempfile_dir("publish-itch-butler-bin");
     let butler_log = root.join("butler.log");
@@ -381,6 +449,7 @@ fn publish_itch_invokes_butler_with_explicit_targets() {
 
     let output = Command::new(binary())
         .args(["build", "web"])
+        .env("LOVELY_JS_PATH", &lovely_js)
         .current_dir(&root)
         .output()
         .unwrap();
@@ -457,6 +526,7 @@ fn publish_itch_rejects_unknown_target() {
 #[test]
 fn build_respects_included_paths() {
     let root = tempfile_dir("included-paths");
+    let lovely_js = fake_lovely_js_runtime(&root);
     fs::create_dir_all(root.join("src")).unwrap();
     fs::create_dir_all(root.join("assets")).unwrap();
     fs::create_dir_all(root.join("node_modules/pkg")).unwrap();
@@ -497,6 +567,7 @@ fn build_respects_included_paths() {
 
     let output = Command::new(binary())
         .args(["build", "web"])
+        .env("LOVELY_JS_PATH", &lovely_js)
         .current_dir(&root)
         .output()
         .unwrap();
@@ -684,6 +755,12 @@ fn write_fake_web_runtime(path: &Path) {
 "#,
     )
     .unwrap();
+}
+
+fn fake_lovely_js_runtime(root: &Path) -> std::path::PathBuf {
+    let lovely_js = root.join("fake-lovely-js");
+    write_fake_web_runtime(&lovely_js.join("dist/web-compat"));
+    lovely_js
 }
 
 fn find_web_zip(root: &Path) -> std::path::PathBuf {
