@@ -133,15 +133,15 @@ impl RuntimeRegistry {
             RuntimeKind::File
         };
         let sha256 = hash_path(source)?;
-        if let Some(expected) = expected_sha256 {
-            if !expected.eq_ignore_ascii_case(&sha256) {
-                return Err(LovelyError::Command(format!(
-                    "runtime checksum mismatch for {}: expected {}, got {}",
-                    source.display(),
-                    expected,
-                    sha256
-                )));
-            }
+        if let Some(expected) = expected_sha256
+            && !expected.eq_ignore_ascii_case(&sha256)
+        {
+            return Err(LovelyError::Command(format!(
+                "runtime checksum mismatch for {}: expected {}, got {}",
+                source.display(),
+                expected,
+                sha256
+            )));
         }
 
         let target_dir = self.target_dir(channel, target);

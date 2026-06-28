@@ -355,6 +355,106 @@ fn runtime_fetch_rejects_checksum_mismatch() {
 }
 
 #[test]
+fn publish_itch_invokes_butler_with_explicit_targets() {
+    let root = tempfile_dir("publish-itch");
+    let cache = tempfile_dir("publish-itch-cache");
+    let butler_dir = tempfile_dir("publish-itch-butler-bin");
+    let butler_log = root.join("butler.log");
+    copy_fixture(&root);
+    write_fake_butler(&butler_dir);
+
+    assert!(
+        Command::new(binary())
+            .arg("init")
+            .current_dir(&root)
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    let config = fs::read_to_string(root.join("lovely.toml")).unwrap();
+    fs::write(
+        root.join("lovely.toml"),
+        config.replace("project = \"\"", "project = \"dvd/sailman\""),
+    )
+    .unwrap();
+
+    let output = Command::new(binary())
+        .args(["build", "web"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let path = prepend_to_path(&butler_dir);
+    let output = Command::new(binary())
+        .args(["publish", "itch", "staging"])
+        .env("PATH", &path)
+        .env("LOVELY_CACHE_DIR", &cache)
+        .env("LOVELY_FAKE_BUTLER_LOG", &butler_log)
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let staging = fs::read_to_string(&butler_log).unwrap();
+    assert!(staging.contains("push\n"));
+    assert!(staging.contains("-web.zip\n"));
+    assert!(staging.contains("dvd/sailman:web-prerelease\n"));
+
+    let output = Command::new(binary())
+        .args(["publish", "itch", "release"])
+        .env("PATH", &path)
+        .env("LOVELY_CACHE_DIR", &cache)
+        .env("LOVELY_FAKE_BUTLER_LOG", &butler_log)
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let release = fs::read_to_string(&butler_log).unwrap();
+    assert!(release.contains("push\n"));
+    assert!(release.contains("-web.zip\n"));
+    assert!(release.contains("dvd/sailman:web\n"));
+}
+
+#[test]
+fn publish_itch_rejects_unknown_target() {
+    let root = tempfile_dir("publish-itch-unknown");
+    copy_fixture(&root);
+    assert!(
+        Command::new(binary())
+            .arg("init")
+            .current_dir(&root)
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    let output = Command::new(binary())
+        .args(["publish", "itch", "nightly"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("expected staging or release"));
+}
+
+#[test]
 fn build_respects_included_paths() {
     let root = tempfile_dir("included-paths");
     fs::create_dir_all(root.join("src")).unwrap();
@@ -621,4 +721,39 @@ fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
     haystack
         .windows(needle.len())
         .any(|window| window == needle)
+}
+
+fn write_fake_butler(path: &Path) {
+    fs::create_dir_all(path).unwrap();
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let script = path.join("butler");
+        fs::write(
+            &script,
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$LOVELY_FAKE_BUTLER_LOG\"\n",
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&script).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&script, permissions).unwrap();
+    }
+
+    #[cfg(windows)]
+    {
+        fs::write(
+            path.join("butler.cmd"),
+            "@echo off\r\n(for %%A in (%*) do echo %%~A) > \"%LOVELY_FAKE_BUTLER_LOG%\"\r\n",
+        )
+        .unwrap();
+    }
+}
+
+fn prepend_to_path(path: &Path) -> std::ffi::OsString {
+    let mut paths = vec![path.to_path_buf()];
+    paths.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+    std::env::join_paths(paths).unwrap()
 }

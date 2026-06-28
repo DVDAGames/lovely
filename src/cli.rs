@@ -1,3 +1,4 @@
+use crate::butler::Butler;
 use crate::check;
 use crate::config::{CONFIG_FILE, Config};
 use crate::fsutil;
@@ -276,7 +277,7 @@ fn build(root: &Path, target: &str) -> Result<()> {
 fn publish(root: &Path, args: &[String]) -> Result<()> {
     let Some(provider) = args.first().map(String::as_str) else {
         return Err(LovelyError::Command(
-            "publish requires a provider; currently supported: itch".to_string(),
+            "publish requires a provider; currently supported: itch [staging|release]".to_string(),
         ));
     };
     if provider != "itch" {
@@ -284,6 +285,13 @@ fn publish(root: &Path, args: &[String]) -> Result<()> {
             "unsupported publish provider {provider:?}; currently supported: itch"
         )));
     }
+    if args.len() > 2 {
+        return Err(LovelyError::Command(
+            "usage: lovely publish itch [staging|release]".to_string(),
+        ));
+    }
+
+    let publish_target = PublishTarget::parse(args.get(1).map(String::as_str))?;
     let config = load_config(root)?;
     let Some(project) = config.itch.project.as_deref() else {
         return Err(LovelyError::Command(
@@ -301,18 +309,38 @@ fn publish(root: &Path, args: &[String]) -> Result<()> {
         )));
     }
 
+    let channel = match publish_target {
+        PublishTarget::Staging => &config.itch.prerelease_channel,
+        PublishTarget::Release => &config.itch.release_channel,
+    };
+    let destination = format!("{project}:{channel}");
+    let butler = Butler::resolve()?;
+
     println!(
-        "Would publish {} to itch.io project {project}.",
-        artifact.display()
-    );
-    println!("Install Butler and run:");
-    println!(
-        "  butler push {} {}:{}",
+        "Publishing {} to itch.io project {destination} with Butler at {}.",
         artifact.display(),
-        project,
-        config.itch.prerelease_channel
+        butler.path().display()
     );
+    butler.push(&artifact, &destination)?;
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PublishTarget {
+    Staging,
+    Release,
+}
+
+impl PublishTarget {
+    fn parse(value: Option<&str>) -> Result<Self> {
+        match value.unwrap_or("staging") {
+            "staging" | "prerelease" => Ok(Self::Staging),
+            "release" | "production" => Ok(Self::Release),
+            other => Err(LovelyError::Command(format!(
+                "unknown itch publish target {other:?}; expected staging or release"
+            ))),
+        }
+    }
 }
 
 fn ci(root: &Path, provider: &str) -> Result<()> {
@@ -424,7 +452,7 @@ Usage:
   lovely check [target...]
   lovely runtime <fetch|doctor|list|cache-dir>
   lovely build [web|windows|macos|linux|desktop|all]
-  lovely publish itch
+  lovely publish itch [staging|release]
   lovely ci github
 
 Targets:

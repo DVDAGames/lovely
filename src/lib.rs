@@ -1,4 +1,5 @@
 pub mod archive;
+pub mod butler;
 pub mod check;
 pub mod cli;
 pub mod config;

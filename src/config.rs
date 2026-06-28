@@ -204,10 +204,10 @@ impl Config {
             config.steam.linux_depot_id =
                 get_optional_string(steam, "linux_depot_id", config.steam.linux_depot_id);
         }
-        if let Some(compatibility) = table.get("compatibility") {
-            if let Some(warnings) = get_string_array(compatibility, "allow_warnings")? {
-                config.compatibility.allow_warnings = warnings;
-            }
+        if let Some(compatibility) = table.get("compatibility")
+            && let Some(warnings) = get_string_array(compatibility, "allow_warnings")?
+        {
+            config.compatibility.allow_warnings = warnings;
         }
 
         config.validate()?;

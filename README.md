@@ -24,6 +24,7 @@ This repository currently contains the first implementation slice:
   the bundle-owned default `index.html` template.
 - Web launch argument configuration for demo/release variants such as
   `arguments = ["--demo-capture"]`.
+- Itch.io publishing through Butler with explicit staging/release targets.
 - Compatibility diagnostics for web-native-module hazards and known love.js
   porting pitfalls.
 - GitHub Actions workflow generation with `lovely ci github`.
@@ -59,7 +60,7 @@ lovely runtime doctor [target|all]
 lovely runtime list
 lovely runtime cache-dir
 lovely build [web|windows|macos|linux|desktop|all]
-lovely publish itch
+lovely publish itch [staging|release]
 lovely ci github
 ```
 
@@ -92,6 +93,11 @@ Use `runtime_path` for project-pinned Lovely.js runtime bundles. Lovely copies
 the runtime files into `dist/web` and the upload ZIP during `lovely build web`,
 while rendering `index.html` from either the project template or the bundle
 default.
+
+Itch.io publishes use Butler. Set `[itch].project` to your Itch project
+slug, then run `lovely publish itch staging` for `prerelease_channel` or
+`lovely publish itch release` for `release_channel`. If Butler is not already
+on `PATH`, Lovely downloads the official Butler archive into its cache first.
 
 ## Scope
 
