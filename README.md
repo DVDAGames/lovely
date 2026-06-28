@@ -5,6 +5,12 @@ A better way to publish LÖVE games.
 Lovely is a GPL-3.0 Rust CLI for turning one LÖVE >= 11 source tree into web
 and desktop/Steam distribution artifacts.
 
+---
+
+**Note:**: This is a work in progress and is 95% vibe coded to get the basics working and validate the idea. Once parity with existing [`love.js`](https://github.com/Davidobot/love.js) builds is achieved, I'll start focusing on patching existing bugs, pulling in outstanding Pull Requests and Issues, and identifying fixes that were added to forks of `love.js` that should be upstreamed into a canonical runtime.
+
+---
+
 This repository currently contains the first implementation slice:
 
 - `lovely.toml` project configuration via `lovely init`.
@@ -13,8 +19,9 @@ This repository currently contains the first implementation slice:
   `~/.cache/lovely`.
 - Deterministic `.love`/ZIP/TAR packaging with normalized file ordering and timestamps.
 - Target adapter seams for web, Windows, macOS, and Linux.
-- Web packaging that emits a small `lovely-web-shims.js` browser compatibility
-  layer for responsive canvas, fullscreen, and mobile text-input hooks.
+- Web packaging that consumes Lovely.js runtime bundles, including
+  `lovely-game-loader.js`, `lovely-web-shims.js`, runtime JavaScript/WASM, and
+  the bundle-owned default `index.html` template.
 - Web launch argument configuration for demo/release variants such as
   `arguments = ["--demo-capture"]`.
 - Compatibility diagnostics for web-native-module hazards and known love.js
@@ -59,8 +66,10 @@ npm run check:js
 ```
 
 Web builds prepend `./game.love` for love.js and append any configured
-`targets.web.arguments`. Custom HTML templates can use `__WEB_ARGUMENTS__` and
-`__WEB_MEMORY__` placeholders:
+`targets.web.arguments`. When no project template is configured, Lovely uses
+the `html` template declared by the selected Lovely.js `lovely-runtime.json`.
+Templates can use `__GAME_TITLE__`, `__WEB_ARGUMENTS__`, and `__WEB_MEMORY__`
+placeholders:
 
 ```toml
 [targets.web]
@@ -69,10 +78,10 @@ runtime_path = "runtimes/web"
 arguments = ["--demo-capture"]
 ```
 
-Use `runtime_path` for project-pinned web runtime artifacts, including patched
-love.js forks. Lovely copies the runtime files into `dist/web` and the upload
-ZIP during `lovely build web`, so game repositories do not need a separate
-machine-local runtime cache step.
+Use `runtime_path` for project-pinned Lovely.js runtime bundles. Lovely copies
+the runtime files into `dist/web` and the upload ZIP during `lovely build web`,
+while rendering `index.html` from either the project template or the bundle
+default.
 
 ## Scope
 

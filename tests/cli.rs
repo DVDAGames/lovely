@@ -57,11 +57,9 @@ fn builds_web_package() {
     );
     assert!(root.join("dist/web/game.love").is_file());
     assert!(root.join("dist/web/index.html").is_file());
-    assert!(root.join("dist/web/lovely-web-shims.js").is_file());
-    let index = fs::read_to_string(root.join("dist/web/index.html")).unwrap();
-    assert!(index.contains("lovely-web-shims.js"));
+    assert!(!root.join("dist/web/lovely-web-shims.js").is_file());
     let manifest = fs::read_to_string(root.join("dist/web/lovely-runtime.txt")).unwrap();
-    assert!(manifest.contains("shims=lovely-web-shims.js"));
+    assert!(!manifest.contains("shims=lovely-web-shims.js"));
     assert!(fs::read_dir(root.join("dist")).unwrap().any(|entry| {
         entry
             .unwrap()
@@ -136,13 +134,7 @@ var Module = {
 fn web_build_uses_configured_runtime_path_without_cache_setup() {
     let root = tempfile_dir("web-runtime-path");
     copy_fixture(&root);
-    fs::create_dir_all(root.join("runtimes/web")).unwrap();
-    fs::write(
-        root.join("runtimes/web/love.js"),
-        "console.log('patched runtime');\n",
-    )
-    .unwrap();
-    fs::write(root.join("runtimes/web/love.wasm"), b"wasm").unwrap();
+    write_fake_web_runtime(&root.join("runtimes/web"));
 
     assert!(
         Command::new(binary())
@@ -188,6 +180,22 @@ fn web_build_uses_configured_runtime_path_without_cache_setup() {
     );
     assert!(root.join("dist/web/love.js").is_file());
     assert!(root.join("dist/web/love.wasm").is_file());
+    assert!(root.join("dist/web/lovely-game-loader.js").is_file());
+    assert!(root.join("dist/web/lovely-web-shims.js").is_file());
+    assert!(root.join("dist/web/lovely-runtime.json").is_file());
+
+    let index = fs::read_to_string(root.join("dist/web/index.html")).unwrap();
+    assert!(index.contains("<title>Lovely Test Web Runtime Path"));
+    assert!(index.contains("args=[\"./game.love\"]"));
+    assert!(index.contains("memory=67108864"));
+    assert!(!index.contains("__GAME_TITLE__"));
+    assert!(!index.contains("__WEB_ARGUMENTS__"));
+    assert!(!index.contains("__WEB_MEMORY__"));
+
+    let zip = fs::read(find_web_zip(&root)).unwrap();
+    assert!(contains_bytes(&zip, b"lovely-game-loader.js"));
+    assert!(contains_bytes(&zip, b"lovely-web-shims.js"));
+    assert!(contains_bytes(&zip, b"lovely-runtime.json"));
 }
 
 #[test]
@@ -196,13 +204,7 @@ fn runtime_fetch_installs_local_runtime_and_web_build_consumes_it() {
     let cache = tempfile_dir("runtime-cache");
     copy_fixture(&root);
     let runtime_dir = root.join("fake-web-runtime");
-    fs::create_dir_all(&runtime_dir).unwrap();
-    fs::write(
-        runtime_dir.join("love.js"),
-        "console.log('love runtime');\n",
-    )
-    .unwrap();
-    fs::write(runtime_dir.join("love.wasm"), b"wasm").unwrap();
+    write_fake_web_runtime(&runtime_dir);
 
     assert!(
         Command::new(binary())
@@ -251,6 +253,12 @@ fn runtime_fetch_installs_local_runtime_and_web_build_consumes_it() {
     );
     assert!(root.join("dist/web/love.js").is_file());
     assert!(root.join("dist/web/love.wasm").is_file());
+    assert!(root.join("dist/web/lovely-game-loader.js").is_file());
+    assert!(root.join("dist/web/lovely-web-shims.js").is_file());
+
+    let index = fs::read_to_string(root.join("dist/web/index.html")).unwrap();
+    assert!(index.contains("<title>Lovely Test Runtime Web"));
+    assert!(index.contains("args=[\"./game.love\"]"));
 }
 
 #[test]
@@ -461,6 +469,66 @@ fn check_respects_included_paths() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+fn write_fake_web_runtime(path: &Path) {
+    fs::create_dir_all(path).unwrap();
+    fs::write(
+        path.join("index.html"),
+        r#"<!doctype html>
+<html>
+<head><title>__GAME_TITLE__</title></head>
+<body>
+<script src="lovely-web-shims.js"></script>
+<script>const args=__WEB_ARGUMENTS__; const memory=__WEB_MEMORY__;</script>
+<script src="lovely-game-loader.js"></script>
+<script async src="love.js"></script>
+</body>
+</html>
+"#,
+    )
+    .unwrap();
+    fs::write(
+        path.join("lovely-game-loader.js"),
+        "console.log('loader');\n",
+    )
+    .unwrap();
+    fs::write(path.join("lovely-web-shims.js"), "console.log('shims');\n").unwrap();
+    fs::write(path.join("love.js"), "console.log('love runtime');\n").unwrap();
+    fs::write(path.join("love.wasm"), b"wasm").unwrap();
+    fs::write(
+        path.join("lovely-runtime.json"),
+        r#"{
+  "schema": 1,
+  "target": "web",
+  "variant": "web-compat",
+  "channel": "love-11-plus",
+  "loveVersion": "11.5",
+  "emscriptenVersion": "2.0.0",
+  "html": "index.html",
+  "loader": "lovely-game-loader.js",
+  "shims": "lovely-web-shims.js",
+  "entrypoint": "love.js",
+  "wasm": "love.wasm",
+  "worker": null,
+  "files": []
+}
+"#,
+    )
+    .unwrap();
+}
+
+fn find_web_zip(root: &Path) -> std::path::PathBuf {
+    fs::read_dir(root.join("dist"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| {
+            path.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .ends_with("-web.zip")
+        })
+        .unwrap()
 }
 
 fn tempfile_dir(name: &str) -> std::path::PathBuf {

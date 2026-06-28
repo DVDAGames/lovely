@@ -38,11 +38,11 @@ Linked commits grouped by runtime concern:
 - `c76c5f5`: responsive mobile layout refinements, loading canvas sizing, and
   better fullscreen styling.
 
-Lovely-side implications:
+Lovely.js-side implications:
 
-- Keep the generated shell responsive and mobile-aware.
-- Emit `lovely-web-shims.js` beside web builds so cached runtimes and custom
-  templates can share a small browser compatibility layer.
+- Keep the runtime-owned shell responsive and mobile-aware.
+- Bundle `lovely-game-loader.js`, `lovely-web-shims.js`, and the default
+  `index.html` template beside `love.js` and `love.wasm`.
 - Treat mobile keyboard support as two phase: runtime/native hook calls a global
   JavaScript function; JavaScript focuses a hidden input during the next touch
   gesture so mobile browsers allow the keyboard.
@@ -53,33 +53,29 @@ Lovely-side implications:
 
 ## Current Lovely implementation
 
-Web builds now emit:
+Web builds now emit or copy:
 
 - `index.html`
-- `lovely-web-shims.js`
+- `lovely-game-loader.js` and `lovely-web-shims.js` from the selected Lovely.js
+  runtime bundle
+- runtime files such as `love.js`, `love.wasm`, and optional worker/theme files
 - `game.love`
 - `lovely-runtime.txt`
 
 `targets.web.arguments` configures game launch arguments for love.js builds.
 Lovely writes `Module.arguments` as `["./game.love", ...arguments]`, so a demo
 web deployment can set `arguments = ["--demo-capture"]`. Custom web templates
-can use the `__WEB_ARGUMENTS__` placeholder to receive that JavaScript array and
-`__WEB_MEMORY__` to receive the configured memory size.
+can use `__GAME_TITLE__`, `__WEB_ARGUMENTS__`, and `__WEB_MEMORY__`
+placeholders. If `targets.web.html_template` is unset and the selected runtime
+bundle contains `lovely-runtime.json`, Lovely reads the bundle's `html` field
+and renders that template as `dist/web/index.html`.
 
 For patched or project-pinned web runtimes, set `targets.web.runtime_path` to a
-project-relative directory or file. This lets `lovely build web` include the
-runtime directly from the game repository or restored release artifact without a
-separate `lovely runtime fetch` setup step. The global runtime cache remains
-useful for shared machine-local tooling, but release-oriented game repos should
-prefer explicit runtime pins.
-
-The shim currently provides:
-
-- responsive canvas resize helper,
-- desktop fullscreen helper,
-- mobile CSS fullscreen fallback,
-- mobile text-input hooks via `SDL_StartTextInput` and `SDL_StopTextInput`,
-- hidden-input forwarding for simple text entry.
+project-relative Lovely.js runtime bundle directory. This lets
+`lovely build web` include the runtime directly from the game repository or
+restored release artifact without a separate `lovely runtime fetch` setup step.
+The global runtime cache remains useful for shared machine-local tooling, but
+release-oriented game repos should prefer explicit runtime pins.
 
 ## Runtime Fork Checklist
 

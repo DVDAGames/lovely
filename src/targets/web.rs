@@ -95,38 +95,34 @@ impl TargetAdapter for WebAdapter {
             &config.paths.excludes,
         )?;
 
-        let index_template = config
+        let runtime = selected_web_runtime(root, config, lock)?;
+        let configured_index_template = config
             .targets
             .web
             .html_template
             .as_ref()
             .map(|template| fsutil::read_to_string(&root.join(template)))
-            .transpose()?
-            .unwrap_or_else(|| default_index(config));
+            .transpose()?;
+        let index_template = if let Some(template) = configured_index_template {
+            template
+        } else if let Some(runtime) = &runtime {
+            runtime_default_html_template(runtime)?.unwrap_or_else(|| default_index(config))
+        } else {
+            default_index(config)
+        };
         let index = render_html_template(&index_template, config);
         fsutil::write_string(&output.join("index.html"), &index)?;
-        let shims = web_shims();
-        fsutil::write_string(&output.join("lovely-web-shims.js"), shims)?;
         fsutil::write_string(
             &output.join("lovely-runtime.txt"),
             &runtime_manifest(config, lock),
         )?;
 
-        let configured_runtime = configured_web_runtime(root, config)?;
-        let cached_runtime = if configured_runtime.is_none() {
-            RuntimeRegistry::new().find("web", &lock.runtime_channel)?
-        } else {
-            None
-        };
-        if let Some(runtime) = &configured_runtime {
+        if let Some(runtime) = &runtime {
             copy_runtime_into_output(runtime.kind, &runtime.path, &output)?;
-        } else if let Some(runtime) = &cached_runtime {
-            copy_runtime_into_output(runtime.manifest.kind, &runtime.path, &output)?;
         }
 
         let mut zip_entries = vec![
             ArchiveEntry::file("index.html", index.into_bytes())?,
-            ArchiveEntry::file("lovely-web-shims.js", shims.as_bytes().to_vec())?,
             ArchiveEntry::file(
                 "game.love",
                 std::fs::read(&love_path).map_err(|err| crate::LovelyError::io(&love_path, err))?,
@@ -136,10 +132,8 @@ impl TargetAdapter for WebAdapter {
                 runtime_manifest(config, lock).into_bytes(),
             )?,
         ];
-        if let Some(runtime) = &configured_runtime {
+        if let Some(runtime) = &runtime {
             append_runtime_zip_entries(runtime.kind, &runtime.path, &mut zip_entries)?;
-        } else if let Some(runtime) = &cached_runtime {
-            append_runtime_zip_entries(runtime.manifest.kind, &runtime.path, &mut zip_entries)?;
         }
         let upload_zip = root
             .join(&config.paths.output)
@@ -148,12 +142,7 @@ impl TargetAdapter for WebAdapter {
 
         Ok(BuildOutput {
             target: self.name().to_string(),
-            artifacts: vec![
-                output.join("index.html"),
-                output.join("lovely-web-shims.js"),
-                love_path,
-                upload_zip,
-            ],
+            artifacts: vec![output.join("index.html"), love_path, upload_zip],
         })
     }
 }
@@ -184,6 +173,22 @@ fn configured_web_runtime(root: &Path, config: &Config) -> Result<Option<WebRunt
     }))
 }
 
+fn selected_web_runtime(
+    root: &Path,
+    config: &Config,
+    lock: &LockFile,
+) -> Result<Option<WebRuntime>> {
+    if let Some(runtime) = configured_web_runtime(root, config)? {
+        return Ok(Some(runtime));
+    }
+    Ok(RuntimeRegistry::new()
+        .find("web", &lock.runtime_channel)?
+        .map(|runtime| WebRuntime {
+            kind: runtime.manifest.kind,
+            path: runtime.path,
+        }))
+}
+
 fn copy_runtime_into_output(kind: RuntimeKind, path: &Path, output: &Path) -> Result<()> {
     match kind {
         RuntimeKind::Directory => {
@@ -192,7 +197,7 @@ fn copy_runtime_into_output(kind: RuntimeKind, path: &Path, output: &Path) -> Re
                 if rel == Path::new("game.love") || rel == Path::new("lovely-runtime.txt") {
                     continue;
                 }
-                if rel == Path::new("index.html") || rel == Path::new("lovely-web-shims.js") {
+                if rel == Path::new("index.html") {
                     continue;
                 }
                 fsutil::copy_file(&file, &output.join(rel))?;
@@ -220,7 +225,7 @@ fn append_runtime_zip_entries(
                 if rel == Path::new("game.love") || rel == Path::new("lovely-runtime.txt") {
                     continue;
                 }
-                if rel == Path::new("index.html") || rel == Path::new("lovely-web-shims.js") {
+                if rel == Path::new("index.html") {
                     continue;
                 }
                 entries.push(ArchiveEntry::file(
@@ -247,6 +252,39 @@ fn append_runtime_zip_entries(
     Ok(())
 }
 
+fn runtime_default_html_template(runtime: &WebRuntime) -> Result<Option<String>> {
+    if runtime.kind != RuntimeKind::Directory {
+        return Ok(None);
+    }
+
+    let manifest_path = runtime.path.join("lovely-runtime.json");
+    if !manifest_path.is_file() {
+        return Ok(None);
+    }
+
+    let manifest = fsutil::read_to_string(&manifest_path)?;
+    let Some(html_path) = json_string_field(&manifest, "html")? else {
+        return Err(crate::LovelyError::Config(format!(
+            "runtime manifest {} is missing html",
+            manifest_path.display()
+        )));
+    };
+    let html_path = Path::new(&html_path);
+    if html_path.is_absolute()
+        || html_path
+            .components()
+            .any(|part| matches!(part, std::path::Component::ParentDir))
+    {
+        return Err(crate::LovelyError::Config(format!(
+            "runtime manifest {} has unsafe html path: {}",
+            manifest_path.display(),
+            html_path.display()
+        )));
+    }
+
+    Ok(Some(fsutil::read_to_string(&runtime.path.join(html_path))?))
+}
+
 fn default_index(config: &Config) -> String {
     format!(
         r#"<!doctype html>
@@ -265,7 +303,6 @@ fn default_index(config: &Config) -> String {
     button {{ appearance: none; border: 1px solid #555; background: #222; color: #eee; padding: .5rem .75rem; border-radius: 4px; cursor: pointer; }}
     code {{ color: #a7f3d0; }}
   </style>
-  <script src="lovely-web-shims.js"></script>
 </head>
 <body>
   <main>
@@ -280,15 +317,6 @@ fn default_index(config: &Config) -> String {
       <p>This package includes <code>game.love</code>. Install a pinned web runtime with <code>lovely runtime fetch web &lt;path&gt;</code> to include JavaScript/WASM runtime files.</p>
     </footer>
   </main>
-  <script>
-    window.Module = window.Module || {{}};
-    window.Module.arguments = __WEB_ARGUMENTS__;
-    window.Module.INITIAL_MEMORY = __WEB_MEMORY__;
-    LovelyWeb.install({{ canvasId: "canvas", containerId: "game-container" }});
-    document.getElementById("fullscreen").addEventListener("click", function () {{
-      LovelyWeb.toggleFullscreen("game-container", "canvas");
-    }});
-  </script>
 </body>
 </html>
 "#,
@@ -296,197 +324,9 @@ fn default_index(config: &Config) -> String {
     )
 }
 
-fn web_shims() -> &'static str {
-    r#""use strict";
-
-// Browser-side compatibility helpers for LÖVE web runtimes.
-// These are runtime-agnostic: if the active runtime exposes matching hooks,
-// Lovely uses them; otherwise the helpers degrade into ordinary DOM behavior.
-(function (global) {
-  var mobileInput = null;
-  var textInputActive = false;
-  var touchListener = null;
-  var resizeObserver = null;
-
-  function isMobileDevice() {
-    return /iPhone|iPad|iPod|Android|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-  }
-
-  function canvasById(canvasId) {
-    return document.getElementById(canvasId || "canvas");
-  }
-
-  function containerById(containerId, canvas) {
-    return document.getElementById(containerId || "game-container") || (canvas && canvas.parentElement) || document.body;
-  }
-
-  function createMobileTextInput(canvasId) {
-    if (mobileInput) {
-      return mobileInput;
-    }
-
-    mobileInput = document.createElement("input");
-    mobileInput.type = "text";
-    mobileInput.autocapitalize = "none";
-    mobileInput.autocomplete = "off";
-    mobileInput.autocorrect = "off";
-    mobileInput.spellcheck = false;
-    mobileInput.style.position = "fixed";
-    mobileInput.style.left = "0";
-    mobileInput.style.top = "0";
-    mobileInput.style.width = "1px";
-    mobileInput.style.height = "1px";
-    mobileInput.style.opacity = "0";
-    mobileInput.style.fontSize = "16px";
-    mobileInput.style.pointerEvents = "none";
-    document.body.appendChild(mobileInput);
-
-    mobileInput.addEventListener("input", function (event) {
-      var canvas = canvasById(canvasId);
-      if (!canvas || !event.data) {
-        return;
-      }
-      canvas.dispatchEvent(new KeyboardEvent("keypress", {
-        key: event.data,
-        code: event.data,
-        charCode: event.data.charCodeAt(0),
-        keyCode: event.data.charCodeAt(0),
-        which: event.data.charCodeAt(0),
-        bubbles: true
-      }));
-      mobileInput.value = "";
-    });
-
-    return mobileInput;
-  }
-
-  function startTextInput(canvasId) {
-    var canvas = canvasById(canvasId);
-    if (!canvas) {
-      return;
-    }
-    createMobileTextInput(canvasId);
-    textInputActive = true;
-
-    if (!isMobileDevice() || touchListener) {
-      return;
-    }
-
-    touchListener = function () {
-      if (textInputActive && mobileInput) {
-        mobileInput.focus();
-      }
-    };
-    canvas.addEventListener("touchstart", touchListener, { passive: true });
-  }
-
-  function stopTextInput(canvasId) {
-    var canvas = canvasById(canvasId);
-    textInputActive = false;
-    if (mobileInput) {
-      mobileInput.blur();
-    }
-    if (canvas && touchListener) {
-      canvas.removeEventListener("touchstart", touchListener);
-    }
-    touchListener = null;
-  }
-
-  function resizeCanvas(canvasId, containerId) {
-    var canvas = canvasById(canvasId);
-    if (!canvas) {
-      return;
-    }
-    var container = containerById(containerId, canvas);
-    var bounds = container.getBoundingClientRect();
-    var width = Math.max(1, Math.floor(bounds.width || canvas.clientWidth || canvas.width));
-    var height = Math.max(1, Math.floor(bounds.height || canvas.clientHeight || canvas.height));
-
-    if (canvas.width !== width || canvas.height !== height) {
-      canvas.width = width;
-      canvas.height = height;
-      if (global.Module && global.Module.canvas === canvas && typeof global.Module.setCanvasSize === "function") {
-        try {
-          global.Module.setCanvasSize(width, height);
-        } catch (error) {
-          console.warn("LovelyWeb resize: Module.setCanvasSize failed", error);
-        }
-      }
-      window.dispatchEvent(new UIEvent("resize"));
-    }
-  }
-
-  function install(options) {
-    options = options || {};
-    var canvasId = options.canvasId || "canvas";
-    var containerId = options.containerId || "game-container";
-    var canvas = canvasById(canvasId);
-    if (!canvas) {
-      return;
-    }
-
-    global.SDL_StartTextInput = global.SDL_StartTextInput || function () {
-      startTextInput(canvasId);
-    };
-    global.SDL_StopTextInput = global.SDL_StopTextInput || function () {
-      stopTextInput(canvasId);
-    };
-
-    window.addEventListener("resize", function () {
-      resizeCanvas(canvasId, containerId);
-    });
-    document.addEventListener("fullscreenchange", function () {
-      resizeCanvas(canvasId, containerId);
-    });
-
-    if ("ResizeObserver" in global) {
-      resizeObserver = new ResizeObserver(function () {
-        resizeCanvas(canvasId, containerId);
-      });
-      resizeObserver.observe(containerById(containerId, canvas));
-    }
-
-    resizeCanvas(canvasId, containerId);
-  }
-
-  function toggleFullscreen(containerId, canvasId) {
-    var canvas = canvasById(canvasId);
-    var container = containerById(containerId, canvas);
-    if (isMobileDevice() && canvas) {
-      var active = canvas.style.position === "fixed";
-      canvas.style.position = active ? "" : "fixed";
-      canvas.style.inset = active ? "" : "0";
-      canvas.style.width = active ? "" : "100vw";
-      canvas.style.height = active ? "" : "100vh";
-      canvas.style.maxWidth = active ? "" : "none";
-      canvas.style.maxHeight = active ? "" : "none";
-      canvas.style.zIndex = active ? "" : "9999";
-      document.body.style.overflow = active ? "" : "hidden";
-      resizeCanvas(canvasId, containerId);
-      return;
-    }
-
-    if (document.fullscreenElement) {
-      document.exitFullscreen();
-    } else if (container.requestFullscreen) {
-      container.requestFullscreen();
-    }
-  }
-
-  global.LovelyWeb = {
-    install: install,
-    resizeCanvas: resizeCanvas,
-    startTextInput: startTextInput,
-    stopTextInput: stopTextInput,
-    toggleFullscreen: toggleFullscreen
-  };
-})(window);
-"#
-}
-
 fn runtime_manifest(config: &Config, lock: &LockFile) -> String {
     format!(
-        "target=web\nvariant={}\nruntime_channel={}\nlove_revision={}\nemscripten_revision={}\nmemory_bytes={}\narguments={}\nshims=lovely-web-shims.js\n",
+        "target=web\nvariant={}\nruntime_channel={}\nlove_revision={}\nemscripten_revision={}\nmemory_bytes={}\narguments={}\n",
         config.targets.web.variant,
         lock.runtime_channel,
         lock.love.revision,
@@ -498,6 +338,7 @@ fn runtime_manifest(config: &Config, lock: &LockFile) -> String {
 
 fn render_html_template(template: &str, config: &Config) -> String {
     template
+        .replace("__GAME_TITLE__", &html_escape(&config.game.name))
         .replace(
             "__WEB_MEMORY__",
             &config.targets.web.memory_bytes.to_string(),
@@ -539,6 +380,82 @@ fn js_string_literal(input: &str) -> String {
     }
     output.push('"');
     output
+}
+
+fn json_string_field(text: &str, key: &str) -> Result<Option<String>> {
+    let needle = format!("\"{}\"", key);
+    let Some(key_index) = text.find(&needle) else {
+        return Ok(None);
+    };
+    let after_key = &text[key_index + needle.len()..];
+    let Some(colon_index) = after_key.find(':') else {
+        return Err(crate::LovelyError::Config(format!(
+            "runtime manifest field {key:?} is missing ':'"
+        )));
+    };
+    let value = after_key[colon_index + 1..].trim_start();
+    let Some(value) = value.strip_prefix('"') else {
+        return Err(crate::LovelyError::Config(format!(
+            "runtime manifest field {key:?} is not a string"
+        )));
+    };
+
+    let mut output = String::new();
+    let mut chars = value.chars();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '"' => return Ok(Some(output)),
+            '\\' => {
+                let Some(escaped) = chars.next() else {
+                    return Err(crate::LovelyError::Config(format!(
+                        "runtime manifest field {key:?} has an incomplete escape"
+                    )));
+                };
+                match escaped {
+                    '"' => output.push('"'),
+                    '\\' => output.push('\\'),
+                    '/' => output.push('/'),
+                    'b' => output.push('\u{0008}'),
+                    'f' => output.push('\u{000c}'),
+                    'n' => output.push('\n'),
+                    'r' => output.push('\r'),
+                    't' => output.push('\t'),
+                    'u' => {
+                        let mut hex = String::new();
+                        for _ in 0..4 {
+                            let Some(digit) = chars.next() else {
+                                return Err(crate::LovelyError::Config(format!(
+                                    "runtime manifest field {key:?} has an incomplete unicode escape"
+                                )));
+                            };
+                            hex.push(digit);
+                        }
+                        let code = u32::from_str_radix(&hex, 16).map_err(|_| {
+                            crate::LovelyError::Config(format!(
+                                "runtime manifest field {key:?} has an invalid unicode escape"
+                            ))
+                        })?;
+                        let Some(decoded) = char::from_u32(code) else {
+                            return Err(crate::LovelyError::Config(format!(
+                                "runtime manifest field {key:?} has an invalid unicode scalar"
+                            )));
+                        };
+                        output.push(decoded);
+                    }
+                    other => {
+                        return Err(crate::LovelyError::Config(format!(
+                            "runtime manifest field {key:?} has an invalid escape: {other}"
+                        )));
+                    }
+                }
+            }
+            ch => output.push(ch),
+        }
+    }
+
+    Err(crate::LovelyError::Config(format!(
+        "runtime manifest field {key:?} is unterminated"
+    )))
 }
 
 fn html_escape(input: &str) -> String {
