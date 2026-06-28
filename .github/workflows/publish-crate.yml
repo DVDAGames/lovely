@@ -19,13 +19,15 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Verify release tag matches crate version
+      - name: Derive crate version from tag
+        id: release
         run: |
-          version="$(awk -F '"' '/^[[:space:]]*version[[:space:]]*=/ { print $2; exit }' Cargo.toml)"
-          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
-            echo "Release tag $GITHUB_REF_NAME does not match Cargo.toml version $version."
+          version="${GITHUB_REF_NAME#v}"
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Release tag $GITHUB_REF_NAME does not look like a semantic version tag."
             exit 1
           fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Verify release tag is on main
         run: |
@@ -33,7 +35,34 @@ jobs:
           release_commit="$(git rev-list -n 1 "$GITHUB_REF_NAME")"
           git merge-base --is-ancestor "$release_commit" origin/main
 
+      - name: Check whether crate version already exists
+        id: crate
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          status="$(curl -A "DVDAGames/lovely publish workflow" -sS -o /dev/null -w "%{http_code}" \
+            "https://crates.io/api/v1/crates/lovely-packager/$RELEASE_VERSION/download")"
+          if [ "$status" = "200" ] || [ "$status" = "302" ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "lovely-packager $RELEASE_VERSION is already published; skipping cargo publish."
+          elif [ "$status" = "404" ]; then
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Unexpected crates.io status while checking lovely-packager $RELEASE_VERSION: $status"
+            exit 1
+          fi
+
+      - name: Set crate version from tag
+        if: steps.crate.outputs.exists != 'true'
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          perl -0pi -e 's/(^\[package\]\nname = "lovely-packager"\nversion = ")[^"]+/$1$ENV{RELEASE_VERSION}/m' Cargo.toml
+          cargo generate-lockfile
+          cargo package --locked --allow-dirty
+
       - name: Publish to crates.io
+        if: steps.crate.outputs.exists != 'true'
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish --locked
+        run: cargo publish --locked --allow-dirty
